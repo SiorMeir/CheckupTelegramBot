@@ -1,0 +1,99 @@
+# CheckupTelegramBot on k3s (standard Kubernetes API)
+#
+# Do not apply this file directly — it contains ${TELEGRAM_BOT_TOKEN} placeholders.
+#
+# 1. Deploy (secrets from your shell env at apply time):
+#      $env:KUBECONFIG = "C:\CodeProjects\CheckupTelegramBot\kubeconfig.yaml"
+#      $env:TELEGRAM_BOT_TOKEN = "..."          # required
+#      $env:CHECKUP_CHAT_ID = "..."             # optional (omit for no reminders)
+#      .\deployment\apply.ps1
+#
+# 2. Registry (deployment/registry.yaml) + push from your PC:
+#      docker build -t checkup-bot:latest .
+#      docker tag checkup-bot:latest 192.168.68.59:30500/checkup-bot:latest
+#      docker push 192.168.68.59:30500/checkup-bot:latest
+#    On the k3s node, /etc/rancher/k3s/registries.yaml must allow HTTP on :30500
+#    (see deployment/k3s-registries.yaml.example), then: sudo systemctl restart k3s
+#
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: checkup-bot
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: checkup-bot-secret
+  namespace: checkup-bot
+type: Opaque
+stringData:
+  TELEGRAM_BOT_TOKEN: "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+  CHECKUP_CHAT_ID: "YOUR_CHECKUP_CHAT_ID_HERE"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkup-bot
+  namespace: checkup-bot
+  labels:
+    app: checkup-bot
+spec:
+  replicas: 1                  # Keep at 1 — multiple replicas would duplicate Telegram updates
+  selector:
+    matchLabels:
+      app: checkup-bot
+  strategy:
+    type: Recreate             # Avoid two pollers during rollout
+  template:
+    metadata:
+      labels:
+        app: checkup-bot
+    spec:
+      containers:
+        - name: checkup-bot
+          image: 192.168.68.59:30500/checkup-bot:latest
+          imagePullPolicy: Always
+          env:
+            - name: JOURNAL_ROOT
+              value: /data/journal
+            - name: TELEGRAM_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: checkup-bot-secret
+                  key: TELEGRAM_BOT_TOKEN
+            - name: CHECKUP_CHAT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: checkup-bot-secret
+                  key: CHECKUP_CHAT_ID
+                  optional: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          volumeMounts:
+            - name: journal
+              mountPath: /data
+      restartPolicy: Always
+      volumes:
+        - name: journal
+          persistentVolumeClaim:
+            claimName: checkup-bot-journal
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: checkup-bot-journal
+  namespace: checkup-bot
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

@@ -1,0 +1,11 @@
+# Copy to the k3s server as /etc/rancher/k3s/registries.yaml, then:
+#   sudo systemctl restart k3s
+#
+mirrors:
+  "192.168.68.59:30500":
+    endpoint:
+      - "http://192.168.68.59:30500"
+configs:
+  "192.168.68.59:30500":
+    tls:
+      insecure_skip_verify: true
