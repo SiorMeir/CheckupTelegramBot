@@ -2,6 +2,7 @@ import logging
 import os
 from datetime import time
 
+from journal.store import JournalStore
 from parser.parser import CheckupParser, DailyCheckIn, WeeklyReview
 from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
@@ -36,7 +37,7 @@ WEEKLY_PROMPT = (
     "Send your check-up in the usual weekly format when you are ready."
 )
 
-
+journal_store = JournalStore()
 # /start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hi! Send me any message and I'll say hello back!")
@@ -108,8 +109,16 @@ async def handle_daily_checkin_text(
         )
         return
 
+    save_note = ""
+    try:
+        path = journal_store.save_daily(raw, parsed)
+        save_note = f"\n\nSaved to journal: {path}"
+    except OSError as e:
+        logger.exception("Failed to save daily check-in to journal")
+        save_note = f"\n\nWarning: could not save to journal: {e}"
+
     context.user_data.pop(AWAITING_DAILY, None)
-    await update.message.reply_text(format_parsed_daily(parsed))
+    await update.message.reply_text(format_parsed_daily(parsed) + save_note)
 
 
 async def handle_weekly_review_text(
@@ -131,8 +140,16 @@ async def handle_weekly_review_text(
         )
         return
 
+    save_note = ""
+    try:
+        path = journal_store.save_weekly(raw, parsed)
+        save_note = f"\n\nSaved to journal: {path}"
+    except OSError as e:
+        logger.exception("Failed to save weekly review to journal")
+        save_note = f"\n\nWarning: could not save to journal: {e}"
+
     context.user_data.pop(AWAITING_WEEKLY, None)
-    await update.message.reply_text(format_parsed_weekly(parsed))
+    await update.message.reply_text(format_parsed_weekly(parsed) + save_note)
 
 
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
