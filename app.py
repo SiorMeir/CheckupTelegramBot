@@ -2,6 +2,9 @@ import logging
 import os
 from datetime import time
 
+from journal.period import parse_period
+from journal.read import JournalReader
+from journal.stats import format_statistics_report
 from journal.store import JournalStore
 from parser.parser import CheckupParser, DailyCheckIn, WeeklyReview
 from zoneinfo import ZoneInfo
@@ -36,8 +39,10 @@ WEEKLY_PROMPT = (
     "Time for your weekly review. "
     "Send your check-up in the usual weekly format when you are ready."
 )
+STATISTICS_USAGE = "Usage: /statistics [Nd|Nw|Nm], for example /statistics 5d, /statistics 2w, /statistics 10m"
 
 journal_store = JournalStore()
+journal_reader = JournalReader(journal_store)
 # /start command handler
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Hi! Send me any message and I'll say hello back!")
@@ -87,6 +92,21 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data[AWAITING_WEEKLY] = True
     await update.message.reply_text(
         "Send your weekly review in one message.\n"
+    )
+
+
+async def statistics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    token = context.args[0] if context.args else None
+
+    try:
+        period = parse_period(token)
+    except ValueError:
+        await update.message.reply_text(STATISTICS_USAGE)
+        return
+
+    collection = journal_reader.collect_daily(period.target_days)
+    await update.message.reply_text(
+        format_statistics_report(period.label, collection)
     )
 
 
@@ -221,6 +241,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("daily", daily_command))
     app.add_handler(CommandHandler("weekly", weekly_command))
+    app.add_handler(CommandHandler("statistics", statistics_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
 
     print("Bot is running... Press Ctrl+C to stop.")

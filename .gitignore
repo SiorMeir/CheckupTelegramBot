@@ -22,3 +22,6 @@ __pycache__/
 
 # real manifest files - all .yaml files in the deployment folder
 deployment/*.yaml
+
+# AI design files
+designs/
