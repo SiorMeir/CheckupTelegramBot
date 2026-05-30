@@ -23,6 +23,63 @@ The flow is intentionally lightweight:
 
 ⏰ Important: reminder prompts do not auto-arm input. After a reminder, you still need to send `/daily` or `/weekly`.
 
+## 🧾 Example Entries
+
+### Daily check-in
+
+```md
+## Daily Check-In
+
+Energy: 7/10
+Focus: 6/10
+Satisfaction: 8/10
+
+### What did I actually do today?
+- Finished the deployment manifest cleanup
+- Replied to two pending client messages
+- Went for a short walk in the evening
+
+### What felt meaningful?
+- Closing the loop on infrastructure work
+- Having one calm hour without context switching
+
+### What drained me?
+- Too many small interruptions
+- Starting the day without a clear priority
+
+### What should tomorrow focus on?
+- Ship the README
+- Block one uninterrupted work session
+```
+
+### Weekly review
+
+```md
+## Week 22 Review
+
+### Momentum
+- Wrote code consistently on most days
+- Kept the bot deployment moving forward
+
+### Friction
+- Switched contexts too often
+- Let small admin tasks break focus
+
+### Avoidance
+- Delayed one uncomfortable technical decision
+
+### Meaningful
+- Built something useful for daily reflection
+- Had a few work sessions that felt calm and deliberate
+
+### Fake productivity
+- Tweaked minor details instead of finishing the important task
+
+### Next Week Focus
+- Finish deployment persistence
+- Keep daily scope smaller and clearer
+```
+
 ## 🏠 Self-Hosted Setup
 
 You need:
