@@ -61,6 +61,18 @@ What should tomorrow focus on?
     ]
 
 
+def test_detect_type_daily_checkin():
+    markdown = """
+## Daily Check-In
+
+Energy: 7/10
+Focus: 5/10
+Satisfaction: 8/10
+"""
+
+    assert CheckupParser.detect_type(markdown) == "daily"
+
+
 def test_parse_weekly_review():
     markdown = """
 ## Week 2 Review
@@ -119,6 +131,31 @@ Next Week Focus:
         "Finish async worker pipeline",
         "No infra changes unless blocking",
     ]
+
+
+def test_detect_type_weekly_review():
+    markdown = """
+## Week 2 Review
+
+Momentum:
+- Daily coding sessions worked well
+"""
+
+    assert CheckupParser.detect_type(markdown) == "weekly"
+
+
+def test_detect_type_unknown_for_unrelated_text():
+    markdown = "# Random Note"
+
+    assert CheckupParser.detect_type(markdown) == "unknown"
+
+
+def test_detect_type_unknown_for_loose_review_mention():
+    markdown = """
+Today I want to review my tasks and plan tomorrow.
+"""
+
+    assert CheckupParser.detect_type(markdown) == "unknown"
 
 
 def test_invalid_format():

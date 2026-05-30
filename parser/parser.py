@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Literal, Optional
 import re
 
 
@@ -35,11 +35,23 @@ class WeeklyReview:
 
 class CheckupParser:
     @staticmethod
+    def detect_type(markdown: str) -> Literal["daily", "weekly", "unknown"]:
+        if re.search(r"^\s*##\s+Daily Check-In\s*$", markdown, re.MULTILINE):
+            return "daily"
+
+        if re.search(r"^\s*##\s+.+\bReview\b\s*$", markdown, re.MULTILINE):
+            return "weekly"
+
+        return "unknown"
+
+    @staticmethod
     def parse(markdown: str):
-        if "## Daily Check-In" in markdown:
+        detected = CheckupParser.detect_type(markdown)
+
+        if detected == "daily":
             return CheckupParser._parse_daily(markdown)
 
-        if "Review" in markdown:
+        if detected == "weekly":
             return CheckupParser._parse_weekly(markdown)
 
         raise ValueError("Unknown check-in format")

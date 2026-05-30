@@ -79,11 +79,23 @@ def format_parsed_weekly(w: WeeklyReview) -> str:
     return "Parsed weekly review:\n\n" + "\n\n".join(sections)
 
 
+def format_detected_success(checkin_type: str, parsed_text: str, save_note: str = "") -> str:
+    return f"Detected as {checkin_type}. Parsed successfully.\n\n{parsed_text}{save_note}"
+
+
+def format_unknown_payload_message() -> str:
+    return (
+        "I couldn't recognize that message as a daily check-in or weekly review.\n\n"
+        "Send it in the usual format, or use /daily or /weekly to force the expected type."
+    )
+
+
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(AWAITING_WEEKLY, None)
     context.user_data[AWAITING_DAILY] = True
     await update.message.reply_text(
-        "Send your daily check-in in one message.\n"
+        "Daily mode enabled for your next message.\n"
+        "Auto-detect also works without this command."
     )
 
 
@@ -91,7 +103,8 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context.user_data.pop(AWAITING_DAILY, None)
     context.user_data[AWAITING_WEEKLY] = True
     await update.message.reply_text(
-        "Send your weekly review in one message.\n"
+        "Weekly mode enabled for your next message.\n"
+        "Auto-detect also works without this command."
     )
 
 
@@ -115,18 +128,20 @@ async def handle_daily_checkin_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     raw = update.message.text
+    detected = CheckupParser.detect_type(raw)
+    if detected == "weekly":
+        await update.message.reply_text(
+            "That looks like a weekly review, but daily mode is enabled.\n\n"
+            "Send a daily check-in, or use /weekly to switch the override."
+        )
+        return
+
     try:
         parsed = CheckupParser.parse(raw)
     except ValueError as e:
         await update.message.reply_text(
-            f"Could not parse that: {e}\n\n"
-            "Fix the message and send again, or send /daily to see the instructions."
-        )
-        return
-
-    if not isinstance(parsed, DailyCheckIn):
-        await update.message.reply_text(
-            'That does not look like a daily check-in (need "## Daily Check-In" at the top). Try again.'
+            f"Could not parse that as a daily check-in: {e}\n\n"
+            "Fix the message and send again, or send /daily to keep daily mode active."
         )
         return
 
@@ -139,25 +154,29 @@ async def handle_daily_checkin_text(
         save_note = f"\n\nWarning: could not save to journal: {e}"
 
     context.user_data.pop(AWAITING_DAILY, None)
-    await update.message.reply_text(format_parsed_daily(parsed) + save_note)
+    await update.message.reply_text(
+        format_detected_success("daily", format_parsed_daily(parsed), save_note)
+    )
 
 
 async def handle_weekly_review_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
     raw = update.message.text
+    detected = CheckupParser.detect_type(raw)
+    if detected == "daily":
+        await update.message.reply_text(
+            "That looks like a daily check-in, but weekly mode is enabled.\n\n"
+            "Send a weekly review, or use /daily to switch the override."
+        )
+        return
+
     try:
         parsed = CheckupParser.parse(raw)
     except ValueError as e:
         await update.message.reply_text(
-            f"Could not parse that: {e}\n\n"
-            "Fix the message and send again, or send /weekly to see the instructions."
-        )
-        return
-
-    if not isinstance(parsed, WeeklyReview):
-        await update.message.reply_text(
-            'That does not look like a weekly review (need "## ... Review" at the top). Try again.'
+            f"Could not parse that as a weekly review: {e}\n\n"
+            "Fix the message and send again, or send /weekly to keep weekly mode active."
         )
         return
 
@@ -170,7 +189,26 @@ async def handle_weekly_review_text(
         save_note = f"\n\nWarning: could not save to journal: {e}"
 
     context.user_data.pop(AWAITING_WEEKLY, None)
-    await update.message.reply_text(format_parsed_weekly(parsed) + save_note)
+    await update.message.reply_text(
+        format_detected_success("weekly", format_parsed_weekly(parsed), save_note)
+    )
+
+
+async def handle_detected_checkin_text(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    raw = update.message.text
+    detected = CheckupParser.detect_type(raw)
+
+    if detected == "unknown":
+        await update.message.reply_text(format_unknown_payload_message())
+        return
+
+    if detected == "daily":
+        await handle_daily_checkin_text(update, context)
+        return
+
+    await handle_weekly_review_text(update, context)
 
 
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -179,7 +217,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     elif context.user_data.get(AWAITING_WEEKLY):
         await handle_weekly_review_text(update, context)
     else:
-        await update.message.reply_text("I didn't receive anything to parse!")
+        await handle_detected_checkin_text(update, context)
 
 
 
