@@ -16,8 +16,17 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Create an unprivileged runtime user.
+RUN groupadd --system appuser \
+    && useradd --system --gid appuser --create-home --home-dir /app appuser
+
 # Copy application code
 COPY . .
+
+RUN mkdir -p /app/journal \
+    && chown -R appuser:appuser /app
+
+USER appuser
 
 # Default command (can be overridden)
 CMD ["python", "app.py"]

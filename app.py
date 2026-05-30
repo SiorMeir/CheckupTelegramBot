@@ -97,11 +97,12 @@ async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 async def statistics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     token = context.args[0] if context.args else None
-
+    logger.info(f"Statistics command called with token: {token}")
     try:
         period = parse_period(token)
     except ValueError:
         await update.message.reply_text(STATISTICS_USAGE)
+        logger.error(f"Invalid period: {token}")
         return
 
     collection = journal_reader.collect_daily(period.target_days)
@@ -244,7 +245,6 @@ def main():
     app.add_handler(CommandHandler("statistics", statistics_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
 
-    print("Bot is running... Press Ctrl+C to stop.")
     app.run_polling()
 
 

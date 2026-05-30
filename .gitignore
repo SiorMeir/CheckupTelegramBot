@@ -25,3 +25,7 @@ deployment/*.yaml
 
 # AI design files
 designs/
+
+# runtime journal entries
+journal/daily/
+journal/weekly/

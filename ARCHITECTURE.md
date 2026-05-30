@@ -17,6 +17,8 @@
 ### Technical design
 - python as main programming language
 - deploy docker images to a private registry within the k3s cluster
+- Docker builds must exclude local secrets and generated journal entries from the build context
+- runtime containers should run as a non-root user
 - input to /daily and /weekly is a free text message
     - later: forms
 - files will be uploaded to a PVC defined in the deployment of the service
@@ -30,3 +32,7 @@
     │   ├── 2026-week-20.md
     │   └── ...
 - scale: single user
+
+### Operational notes
+- generated entries under `journal/daily/` and `journal/weekly/` are runtime data and should not be committed
+- Docker images should not include local `.env` files, kubeconfigs, or journal output

@@ -15,6 +15,8 @@ A Python Telegram bot that parses markdown **daily check-ins** and **weekly revi
 2. **Check-in parser** (`parser/`) — `CheckupParser` and dataclasses `DailyCheckIn`, `WeeklyReview`; covered by unit tests and imported by the bot.
 3. **Journal storage** (`journal/`) — `JournalStore` writes `journal/daily/YYYY-MM-DD.md` and `journal/weekly/YYYY-week-WW.md` atomically with simple YAML frontmatter. Root path defaults to `journal/` and can be overridden with `JOURNAL_ROOT`.
 
+Runtime journal entries under `journal/daily/` and `journal/weekly/` are ignored by git and excluded from Docker build context so private check-ins are not published accidentally.
+
 ## Not implemented (vs ARCHITECTURE.md)
 
 | Area | Planned (HLD) | Status |
@@ -41,7 +43,7 @@ A Python Telegram bot that parses markdown **daily check-ins** and **weekly revi
 | `tests/journal_store_test.py` | Pytest for journal file layout, frontmatter, and atomic writes |
 | `tests/app_storage_test.py` | Pytest that daily/weekly handlers save to journal and degrade cleanly on write failure |
 | `requirements.txt` | Pinned deps (`python-telegram-bot`, `python-dotenv`, `pytest`, etc.) |
-| `Dockerfile` | Python 3.12-slim image; installs deps and runs `python app.py` |
+| `Dockerfile` | Python 3.12-slim image; installs deps and runs `python app.py` as a non-root user |
 | `deployment/manifest.yaml` | k8s Namespace, Secret, Deployment (single replica, `Recreate` strategy) |
 | `deployment/apply.ps1` | Substitutes env into manifest placeholders, then `kubectl apply` |
 | `deployment/registry.yaml` | In-cluster registry service (homelab) |
@@ -78,6 +80,8 @@ A Python Telegram bot that parses markdown **daily check-ins** and **weekly revi
   docker build -t checkup-bot .
   docker run --env TELEGRAM_BOT_TOKEN=... --env CHECKUP_CHAT_ID=... checkup-bot
   ```
+
+  The Docker build context excludes local secrets, editor metadata, and runtime journal entries via `.dockerignore`. The container runs as an unprivileged user.
 
 - **Kubernetes** — do not `kubectl apply` `manifest.yaml` raw if it still contains `${TELEGRAM_BOT_TOKEN}` placeholders or live secrets. Use `deployment/apply.ps1` with env set, or edit the Secret locally without committing. Deployment injects `TELEGRAM_BOT_TOKEN` and optional `CHECKUP_CHAT_ID` from the Secret (matches `app.py`). Keep **one replica** (`Recreate` strategy) to avoid duplicate pollers.
 

@@ -167,10 +167,3 @@ Next Week Focus:
 - Finish async worker pipeline
 - No infra changes unless blocking
 """
-
-daily = CheckupParser.parse(daily_md)
-weekly = CheckupParser.parse(weekly_md)
-
-print(daily)
-print()
-print(weekly)
