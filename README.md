@@ -149,3 +149,11 @@ Tests:
 ```bash
 python -m pytest tests/
 ```
+
+Install the git hook:
+
+```bash
+python -m pre_commit install
+```
+
+The hook runs `ruff-check` on staged Python changes before each commit.

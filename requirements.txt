@@ -9,6 +9,7 @@ httpx==0.28.1
 idna==3.13
 iniconfig==2.3.0
 packaging==26.2
+pre-commit==4.3.0
 pluggy==1.6.0
 Pygments==2.20.0
 pytest==9.0.3
