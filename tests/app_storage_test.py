@@ -1,7 +1,6 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-import pytest
 
 import app
 from parser import DailyCheckIn, WeeklyReview
