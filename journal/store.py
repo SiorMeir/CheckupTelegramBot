@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -27,9 +27,20 @@ class JournalStore:
     def _daily_filename(self, when: datetime) -> str:
         return f"{when.strftime('%Y-%m-%d')}.md"
 
+    def _weekly_bounds(self, day: date) -> tuple[date, date]:
+        # Sunday-Saturday week.
+        delta = (day.weekday() - 6) % 7
+        start_date = day - timedelta(days=delta)
+        return start_date, start_date + timedelta(days=6)
+
+    def _weekly_label(self, day: date) -> str:
+        start_date, end_date = self._weekly_bounds(day)
+        first_week_end = self._weekly_bounds(date(end_date.year, 1, 1))[1]
+        week_number = ((end_date - first_week_end).days // 7) + 1
+        return f"{end_date.year}-week-{week_number:02d}"
+
     def _weekly_filename(self, when: datetime) -> str:
-        iso = when.isocalendar()
-        return f"{iso.year}-week-{iso.week:02d}.md"
+        return f"{self._weekly_label(when.date())}.md"
 
     def _format_frontmatter(self, lines: list[str]) -> str:
         return "---\n" + "\n".join(lines) + "\n---\n"
@@ -46,12 +57,13 @@ class JournalStore:
         return self._format_frontmatter(lines)
 
     def _weekly_frontmatter(self, when: datetime) -> str:
-        iso = when.isocalendar()
-        week_label = f"{iso.year}-week-{iso.week:02d}"
+        week_start, week_end = self._weekly_bounds(when.date())
         lines = [
             "type: weekly",
             f"date: {when.strftime('%Y-%m-%d')}",
-            f"week: {week_label}",
+            f"week: {self._weekly_label(when.date())}",
+            f"week_start: {week_start.isoformat()}",
+            f"week_end: {week_end.isoformat()}",
             f"saved_at: {when.isoformat()}",
         ]
         return self._format_frontmatter(lines)

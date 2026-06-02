@@ -31,6 +31,7 @@ type: Opaque
 stringData:
   TELEGRAM_BOT_TOKEN: "YOUR_TELEGRAM_BOT_TOKEN_HERE"
   CHECKUP_CHAT_ID: "YOUR_CHECKUP_CHAT_ID_HERE"
+  OPENAI_API_KEY: "YOUR_OPENAI_API_KEY_HERE"
 
 ---
 apiVersion: apps/v1
@@ -52,6 +53,25 @@ spec:
       labels:
         app: checkup-bot
     spec:
+      securityContext:
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        runAsUser: 10001
+        runAsGroup: 10001
+      initContainers:
+        - name: journal-permissions
+          image: 192.168.68.59:30500/checkup-bot:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - mkdir -p /data/journal/daily /data/journal/weekly && chown -R 10001:10001 /data/journal && chmod -R ug+rwX /data/journal
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - name: journal
+              mountPath: /data
       containers:
         - name: checkup-bot
           image: 192.168.68.59:30500/checkup-bot:latest
@@ -59,6 +79,16 @@ spec:
           env:
             - name: JOURNAL_ROOT
               value: /data/journal
+            - name: REVIEW_MAX_INPUT_TOKENS
+              value: "8000"
+            - name: LLM_TIMEOUT_SECONDS
+              value: "180"
+            - name: LLM_PROVIDER
+              value: OPENAI
+            - name: LLM_MODEL
+              value: gpt-4o-mini
+            - name: LOCAL_BASE_URL
+              value: http://host.docker.internal:11434
             - name: TELEGRAM_BOT_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -69,6 +99,12 @@ spec:
                 secretKeyRef:
                   name: checkup-bot-secret
                   key: CHECKUP_CHAT_ID
+                  optional: true
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: checkup-bot-secret
+                  key: OPENAI_API_KEY
                   optional: true
           resources:
             requests:

@@ -10,6 +10,7 @@ Send markdown, get a clean parsed summary back, and keep every entry stored loca
 - stores entries as local files in `journal/daily/` and `journal/weekly/`
 - replies with a structured summary after each successful submission
 - sends scheduled reminder prompts to a configured Telegram chat
+- Send the journal corpus to a configured LLM for quick analysis & trend discovery
 
 ## 💬 UX In Practice
 
@@ -18,6 +19,7 @@ The flow is intentionally lightweight:
 - `/start` gives a short greeting
 - `/daily` arms your next message as a daily check-in
 - `/weekly` arms your next message as a weekly review
+- `/review 2w` analyzes the last 14 days using whatever daily and weekly data exists in that window
 - you paste your markdown entry
 - the bot parses it, saves it, and replies with a readable summary
 
@@ -92,6 +94,12 @@ Environment variables:
 - `TELEGRAM_BOT_TOKEN`: required
 - `CHECKUP_CHAT_ID`: optional
 - `JOURNAL_ROOT`: optional, defaults to `journal`
+- `LLM_PROVIDER`: optional unless you use `/review`, supports `OPENAI` or `LOCAL`
+- `LLM_MODEL`: optional unless you use `/review`
+- `OPENAI_API_KEY`: required for `/review` when `LLM_PROVIDER=OPENAI`
+- `LOCAL_BASE_URL`: required for `/review` when `LLM_PROVIDER=LOCAL`; for LM Studio this is the open OpenAI-compatible base URL
+- `REVIEW_MAX_INPUT_TOKENS`: optional, defaults to `8000`
+- `LLM_TIMEOUT_SECONDS`: optional, defaults to `180`
 
 ### 🐳 Simple Container
 
@@ -102,6 +110,9 @@ docker build -t checkup-bot .
 docker run \
   -e TELEGRAM_BOT_TOKEN=your-token \
   -e CHECKUP_CHAT_ID=your-chat-id \
+  -e LLM_PROVIDER=LOCAL \
+  -e LLM_MODEL=your-lmstudio-model \
+  -e LOCAL_BASE_URL=http://127.0.0.1:1234 \
   -v $(pwd)/journal:/app/journal \
   checkup-bot
 ```
@@ -123,6 +134,8 @@ Notes:
 
 - keep one replica to avoid duplicate Telegram polling
 - DO NOT commit live secrets into `deployment/manifest.yaml`
+- `/review` uses trailing calendar days and accepts partial coverage such as `12/14 daily, 1 weekly`
+- oversized review payloads fail fast and should be retried with fewer weeks
 
 ## 🔧 Local Run
 

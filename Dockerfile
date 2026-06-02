@@ -16,9 +16,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Create an unprivileged runtime user.
-RUN groupadd --system appuser \
-    && useradd --system --gid appuser --create-home --home-dir /app appuser
+# Create an unprivileged runtime user with a stable uid/gid so mounted
+# volumes can be prepared for the running process.
+RUN groupadd --system --gid 10001 appuser \
+    && useradd --system --uid 10001 --gid appuser --create-home --home-dir /app appuser
 
 # Copy application code
 COPY . .

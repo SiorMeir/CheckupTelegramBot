@@ -71,6 +71,7 @@ def test_post_init_registers_daily_and_weekly(checkup_chat_id_env):
     assert weekly_kw["name"] == "weekly_checkup_prompt"
 
 
+
 def test_scheduled_prompt_daily():
     async def _body():
         context = MagicMock()

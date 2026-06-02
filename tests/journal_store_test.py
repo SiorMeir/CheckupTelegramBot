@@ -99,9 +99,6 @@ def test_daily_frontmatter_contains_expected_keys(
 def test_weekly_frontmatter_is_yaml_parseable(
     journal_root, fixed_when, weekly_parsed
 ):
-    iso = fixed_when.isocalendar()
-    week_label = f"{iso.year}-week-{iso.week:02d}"
-
     store = JournalStore()
     path = store.save_weekly(
         SAMPLE_WEEKLY_RAW, weekly_parsed, when=fixed_when
@@ -109,7 +106,9 @@ def test_weekly_frontmatter_is_yaml_parseable(
     frontmatter, body = _split_frontmatter(path.read_text(encoding="utf-8"))
 
     assert "type: weekly" in frontmatter
-    assert f"week: {week_label}" in frontmatter
+    assert "week: 2026-week-21" in frontmatter
+    assert "week_start: 2026-05-17" in frontmatter
+    assert "week_end: 2026-05-23" in frontmatter
     assert "[" not in frontmatter
     assert "'" not in frontmatter
     assert body == SAMPLE_WEEKLY_RAW
@@ -150,8 +149,7 @@ def test_write_is_atomic(journal_root, fixed_when, daily_parsed, monkeypatch):
 def test_weekly_file_uses_iso_week_filename(
     journal_root, fixed_when, weekly_parsed
 ):
-    iso = fixed_when.isocalendar()
-    expected_name = f"{iso.year}-week-{iso.week:02d}.md"
+    expected_name = "2026-week-21.md"
 
     store = JournalStore()
     path = store.save_weekly(
