@@ -10,7 +10,7 @@ from journal.read import (
     ReviewDailyEntry,
     ReviewWeeklyEntry,
 )
-from journal.stats import DailyAverages, compute_daily_averages, format_statistics_report
+from journal.stats import DailyAverages, compute_daily_averages
 
 __all__ = [
     "DailyAverages",
@@ -26,7 +26,6 @@ __all__ = [
     "ReviewPeriodSpec",
     "ReviewWeeklyEntry",
     "compute_daily_averages",
-    "format_statistics_report",
     "parse_period",
     "parse_review_period",
 ]

@@ -2,6 +2,8 @@ import asyncio
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
+from telegram.constants import ParseMode
+
 import app
 from journal.period import ReviewPeriodSpec
 from journal.read import (
@@ -11,8 +13,8 @@ from journal.read import (
     ReviewDailyEntry,
     ReviewWeeklyEntry,
 )
+from messages import TemplateId
 from review.llm import LLMConfig, LLMConfigError, LLMRequestTooLargeError, LLMResult
-from telegram.constants import ParseMode
 
 
 def _run(coro):
@@ -83,7 +85,11 @@ def test_review_command_rejects_invalid_args():
 
     _run(app.review_command(update, context))
 
-    assert update.message.reply_text.await_args.args[0] == app.REVIEW_USAGE
+    assert (
+        update.message.reply_text.await_args.args[0]
+        == app.message_renderer.render(TemplateId.TEXT, {"text_key": "review_usage"}).text
+    )
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 
 def test_review_command_reports_no_data(monkeypatch):
@@ -102,6 +108,7 @@ def test_review_command_reports_no_data(monkeypatch):
     _run(app.review_command(update, context))
 
     assert update.message.reply_text.await_args.args[0] == "No journal entries for 2w."
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 
 def test_review_command_reports_token_cap_failure(monkeypatch):
@@ -136,6 +143,7 @@ def test_review_command_reports_token_cap_failure(monkeypatch):
 
     reply = update.message.reply_text.await_args.args[0]
     assert "too large for the configured model input budget" in reply
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 
 def test_review_command_formats_successful_reply(monkeypatch):
@@ -174,12 +182,11 @@ def test_review_command_formats_successful_reply(monkeypatch):
     _run(app.review_command(update, context))
 
     reply = update.message.reply_text.await_args.args[0]
-    assert "<b>Review · 2w</b>" in reply
+    assert "<b>Review | 2w</b>" in reply
     assert "Coverage: 12/14 daily, 1 weekly" in reply
     assert "Model: OPENAI/gpt-test" in reply
-    assert "<b>Positive trends</b>" in reply
-    assert "• Strong week." in reply
-    assert "• <b>Visible</b> progress." in reply
+    assert "<p><b>Positive trends</b></p>" in reply
+    assert "<ul><li>Strong week.</li><li><b>Visible</b> progress.</li></ul>" in reply
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 
@@ -200,16 +207,4 @@ def test_review_command_reports_configuration_error(monkeypatch):
     _run(app.review_command(update, context))
 
     assert update.message.reply_text.await_args.args[0] == "Review is not configured: missing key"
-
-
-def test_format_review_analysis_html_handles_markdown_bullets_and_bold():
-    rendered = app._format_review_analysis_html(
-        "**Positive trends**\n- Energy rose from **3** to **5**.\n\nPlain line."
-    )
-
-    assert rendered == (
-        "<b>Positive trends</b>\n"
-        "• Energy rose from <b>3</b> to <b>5</b>.\n"
-        "\n"
-        "Plain line."
-    )
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML

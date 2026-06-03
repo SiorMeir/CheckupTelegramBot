@@ -1,8 +1,12 @@
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
 from datetime import date
+from unittest.mock import AsyncMock, MagicMock
+
+from telegram.constants import ParseMode
+
 import app
 from journal.read import DailyCollection, DailyEntry
+from messages import TemplateId
 
 
 def _run(coro):
@@ -39,8 +43,9 @@ def test_statistics_command_uses_default_period(monkeypatch):
 
     reader.collect_daily.assert_called_once_with(28)
     reply = update.message.reply_text.await_args.args[0]
-    assert "Statistics · 4w" in reply
-    assert "Partial: 2 of 28 days" in reply
+    assert "<b>Statistics | 4w</b>" in reply
+    assert "Partial: 2 of 28 days | 2026-05-24 - 2026-05-25" in reply
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 
 def test_statistics_command_supports_explicit_period(monkeypatch):
@@ -64,8 +69,9 @@ def test_statistics_command_supports_explicit_period(monkeypatch):
 
     reader.collect_daily.assert_called_once_with(5)
     reply = update.message.reply_text.await_args.args[0]
-    assert "Statistics · 5d" in reply
-    assert "5 days · 2026-05-21 – 2026-05-25" in reply
+    assert "<b>Statistics | 5d</b>" in reply
+    assert "5 days | 2026-05-21 - 2026-05-25" in reply
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 
 def test_statistics_command_rejects_invalid_args():
@@ -74,7 +80,11 @@ def test_statistics_command_rejects_invalid_args():
 
     _run(app.statistics_command(update, context))
 
-    assert update.message.reply_text.await_args.args[0] == app.STATISTICS_USAGE
+    assert (
+        update.message.reply_text.await_args.args[0]
+        == app.message_renderer.render(TemplateId.TEXT, {"text_key": "statistics_usage"}).text
+    )
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 
 def test_statistics_command_reports_no_data(monkeypatch):
@@ -87,3 +97,4 @@ def test_statistics_command_reports_no_data(monkeypatch):
     _run(app.statistics_command(update, context))
 
     assert update.message.reply_text.await_args.args[0] == "No daily entries for 2w."
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML

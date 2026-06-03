@@ -1,16 +1,15 @@
 import json
 import logging
 import os
-import re
-from datetime import datetime, time
-from html import escape
+from datetime import time
+from typing import Any, Mapping
 
 from dotenv import load_dotenv
 from journal.period import parse_period, parse_review_period
 from journal.read import JournalReader, ReviewCollection
-from journal.stats import format_statistics_report
 from journal.store import ILS_TZ, JournalStore
-from parser.parser import CheckupParser, DailyCheckIn, WeeklyReview
+from messages import TelegramMessageRenderer, TemplateId
+from parser import CheckupParser
 from review.llm import (
     LLMConfigError,
     LLMRequestError,
@@ -20,8 +19,7 @@ from review.llm import (
     load_llm_config_from_env,
 )
 from review.prompt import REVIEW_SYSTEM_PROMPT
-from telegram import Update
-from telegram.constants import ParseMode
+from telegram import Bot, Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -40,67 +38,40 @@ logger = logging.getLogger(__name__)
 AWAITING_DAILY = "awaiting_daily_checkin"
 AWAITING_WEEKLY = "awaiting_weekly_review"
 
-DAILY_PROMPT = (
-    "Time for your daily check-in. "
-    "Send your check-up in the usual daily format when you are ready."
-)
-WEEKLY_PROMPT = (
-    "Time for your weekly review. "
-    "Send your check-up in the usual weekly format when you are ready."
-)
-STATISTICS_USAGE = (
-    "Usage: /statistics [Nd|Nw|Nm], for example /statistics 5d, /statistics 2w, /statistics 10m"
-)
-REVIEW_USAGE = "Usage: /review [Nw], for example /review 2w"
-
 journal_store = JournalStore()
 journal_reader = JournalReader(journal_store)
+message_renderer = TelegramMessageRenderer()
+
+
+async def _reply_with_template(
+    update: Update,
+    template: TemplateId,
+    message: Mapping[str, Any] | None = None,
+) -> None:
+    rendered = message_renderer.render(template, message or {})
+    await update.message.reply_text(
+        rendered.text,
+        parse_mode=rendered.parse_mode,
+    )
+
+
+async def _send_with_template(
+    bot: Bot,
+    *,
+    chat_id: int,
+    template: TemplateId,
+    message: Mapping[str, Any] | None = None,
+) -> None:
+    rendered = message_renderer.render(template, message or {})
+    await bot.send_message(
+        chat_id=chat_id,
+        text=rendered.text,
+        parse_mode=rendered.parse_mode,
+    )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Hi! Send me any message and I'll say hello back!")
-
-
-def format_parsed_daily(d: DailyCheckIn) -> str:
-    def block(title: str, items: list[str]) -> str:
-        body = "\n".join(f"- {x}" for x in items) if items else "(none)"
-        return f"{title}\n{body}"
-
-    scores = f"Energy {d.energy}/10 | Focus {d.focus}/10 | Satisfaction {d.satisfaction}/10"
-    sections = [
-        block("Did today", d.did_today),
-        block("Meaningful", d.meaningful),
-        block("Drained", d.drained),
-        block("Tomorrow focus", d.tomorrow_focus),
-    ]
-    return "Parsed daily check-in:\n\n" + scores + "\n\n" + "\n\n".join(sections)
-
-
-def format_parsed_weekly(w: WeeklyReview) -> str:
-    def block(title: str, items: list[str]) -> str:
-        body = "\n".join(f"- {x}" for x in items) if items else "(none)"
-        return f"{title}\n{body}"
-
-    sections = [
-        block("Momentum", w.momentum),
-        block("Friction", w.friction),
-        block("Avoidance", w.avoidance),
-        block("Meaningful", w.meaningful),
-        block("Fake productivity", w.fake_productivity),
-        block("Next week focus", w.next_week_focus),
-    ]
-    return "Parsed weekly review:\n\n" + "\n\n".join(sections)
-
-
-def format_detected_success(checkin_type: str, parsed_text: str, save_note: str = "") -> str:
-    return f"Detected as {checkin_type}. Parsed successfully.\n\n{parsed_text}{save_note}"
-
-
-def format_unknown_payload_message() -> str:
-    return (
-        "I couldn't recognize that message as a daily check-in or weekly review.\n\n"
-        "Send it in the usual format, or use /daily or /weekly to force the expected type."
-    )
+    await _reply_with_template(update, TemplateId.TEXT, {"text_key": "start"})
 
 
 def _serialize_review_collection(collection: ReviewCollection) -> str:
@@ -152,67 +123,16 @@ def _serialize_review_collection(collection: ReviewCollection) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
-def _format_review_reply_header(collection: ReviewCollection, provider: str, model: str) -> str:
-    generated_at = datetime.now(ILS_TZ).strftime("%Y-%m-%d %H:%M")
-    return "\n".join(
-        [
-            f"<b>Review · {escape(collection.period.label)}</b>",
-            f"Period: {collection.period.start_date.isoformat()} - {collection.period.end_date.isoformat()} ({ILS_TZ})",
-            (
-                f"Coverage: {collection.coverage.found_daily_count}/"
-                f"{collection.coverage.expected_daily_days} daily, "
-                f"{collection.coverage.found_weekly_count} weekly"
-            ),
-            f"Model: {provider}/{model}",
-            f"Generated: {generated_at}",
-        ]
-    )
-
-
-def _render_review_inline_html(text: str) -> str:
-    parts: list[str] = []
-    cursor = 0
-    for match in re.finditer(r"\*\*(.+?)\*\*", text):
-        parts.append(escape(text[cursor:match.start()]))
-        parts.append(f"<b>{escape(match.group(1))}</b>")
-        cursor = match.end()
-    parts.append(escape(text[cursor:]))
-    return "".join(parts)
-
-
-def _format_review_analysis_html(text: str) -> str:
-    lines: list[str] = []
-    for raw_line in text.splitlines():
-        stripped = raw_line.strip()
-        if not stripped:
-            lines.append("")
-            continue
-
-        if stripped.startswith("- "):
-            lines.append(f"• {_render_review_inline_html(stripped[2:].strip())}")
-            continue
-
-        lines.append(_render_review_inline_html(stripped))
-
-    return "\n".join(lines)
-
-
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(AWAITING_WEEKLY, None)
     context.user_data[AWAITING_DAILY] = True
-    await update.message.reply_text(
-        "Daily mode enabled for your next message.\n"
-        "Auto-detect also works without this command."
-    )
+    await _reply_with_template(update, TemplateId.TEXT, {"text_key": "daily_mode_enabled"})
 
 
 async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop(AWAITING_DAILY, None)
     context.user_data[AWAITING_WEEKLY] = True
-    await update.message.reply_text(
-        "Weekly mode enabled for your next message.\n"
-        "Auto-detect also works without this command."
-    )
+    await _reply_with_template(update, TemplateId.TEXT, {"text_key": "weekly_mode_enabled"})
 
 
 async def statistics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -221,61 +141,88 @@ async def statistics_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         period = parse_period(token)
     except ValueError:
-        await update.message.reply_text(STATISTICS_USAGE)
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "statistics_usage"})
         logger.error("Invalid period: %s", token)
         return
 
     collection = journal_reader.collect_daily(period.target_days)
-    await update.message.reply_text(format_statistics_report(period.label, collection))
+    if not collection.entries:
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "statistics_empty", "period_label": period.label},
+        )
+        return
+
+    await _reply_with_template(
+        update,
+        TemplateId.STATISTICS_REPORT,
+        {
+            "period_label": period.label,
+            "collection": collection,
+        },
+    )
 
 
 async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if len(context.args) > 1:
-        await update.message.reply_text(REVIEW_USAGE)
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "review_usage"})
         return
 
     token = context.args[0] if context.args else None
     try:
         period = parse_review_period(token)
     except ValueError:
-        await update.message.reply_text(REVIEW_USAGE)
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "review_usage"})
         return
 
     collection = journal_reader.collect_review(period)
     if not collection.daily_entries and not collection.weekly_entries:
-        await update.message.reply_text(f"No journal entries for {period.label}.")
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "review_empty", "period_label": period.label},
+        )
         return
 
     try:
         config = load_llm_config_from_env()
     except LLMConfigError as exc:
         logger.error("Review command configuration error: %s", exc)
-        await update.message.reply_text(f"Review is not configured: {exc}")
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "review_not_configured", "error": exc},
+        )
         return
 
     user_payload = _serialize_review_collection(collection)
     try:
         ensure_input_token_budget(config, REVIEW_SYSTEM_PROMPT, user_payload)
     except LLMRequestTooLargeError:
-        await update.message.reply_text(
-            "That review period is too large for the configured model input budget. Retry with fewer weeks."
-        )
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "review_too_large"})
         return
 
     try:
         result = await generate_review_text(config, REVIEW_SYSTEM_PROMPT, user_payload)
     except LLMRequestError as exc:
         logger.exception("Review command failed while calling the LLM provider")
-        await update.message.reply_text(
-            f"Review failed while calling the LLM provider: {exc}"
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "review_provider_failure", "error": exc},
         )
         return
 
-    header = _format_review_reply_header(collection, result.provider, result.model)
-    body = _format_review_analysis_html(result.content)
-    await update.message.reply_text(
-        f"{header}\n\n{body}",
-        parse_mode=ParseMode.HTML,
+    await _reply_with_template(
+        update,
+        TemplateId.REVIEW_REPORT,
+        {
+            "collection": collection,
+            "provider": result.provider,
+            "model": result.model,
+            "analysis": result.content,
+        },
     )
 
 
@@ -285,32 +232,37 @@ async def handle_daily_checkin_text(
     raw = update.message.text
     detected = CheckupParser.detect_type(raw)
     if detected == "weekly":
-        await update.message.reply_text(
-            "That looks like a weekly review, but daily mode is enabled.\n\n"
-            "Send a daily check-in, or use /weekly to switch the override."
-        )
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "daily_mode_mismatch"})
         return
 
     try:
         parsed = CheckupParser.parse(raw)
-    except ValueError as e:
-        await update.message.reply_text(
-            f"Could not parse that as a daily check-in: {e}\n\n"
-            "Fix the message and send again, or send /daily to keep daily mode active."
+    except ValueError as exc:
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "daily_parse_failure", "error": exc},
         )
         return
 
-    save_note = ""
+    saved_path = None
+    save_error = None
     try:
-        path = journal_store.save_daily(raw, parsed)
-        save_note = f"\n\nSaved to journal: {path}"
-    except OSError as e:
+        saved_path = journal_store.save_daily(raw, parsed)
+    except OSError as exc:
         logger.exception("Failed to save daily check-in to journal")
-        save_note = f"\n\nWarning: could not save to journal: {e}"
+        save_error = exc
 
     context.user_data.pop(AWAITING_DAILY, None)
-    await update.message.reply_text(
-        format_detected_success("daily", format_parsed_daily(parsed), save_note)
+    await _reply_with_template(
+        update,
+        TemplateId.CHECKIN_RESULT,
+        {
+            "checkin_type": "daily",
+            "parsed": parsed,
+            "saved_path": saved_path,
+            "save_error": save_error,
+        },
     )
 
 
@@ -320,32 +272,37 @@ async def handle_weekly_review_text(
     raw = update.message.text
     detected = CheckupParser.detect_type(raw)
     if detected == "daily":
-        await update.message.reply_text(
-            "That looks like a daily check-in, but weekly mode is enabled.\n\n"
-            "Send a weekly review, or use /daily to switch the override."
-        )
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "weekly_mode_mismatch"})
         return
 
     try:
         parsed = CheckupParser.parse(raw)
-    except ValueError as e:
-        await update.message.reply_text(
-            f"Could not parse that as a weekly review: {e}\n\n"
-            "Fix the message and send again, or send /weekly to keep weekly mode active."
+    except ValueError as exc:
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "weekly_parse_failure", "error": exc},
         )
         return
 
-    save_note = ""
+    saved_path = None
+    save_error = None
     try:
-        path = journal_store.save_weekly(raw, parsed)
-        save_note = f"\n\nSaved to journal: {path}"
-    except OSError as e:
+        saved_path = journal_store.save_weekly(raw, parsed)
+    except OSError as exc:
         logger.exception("Failed to save weekly review to journal")
-        save_note = f"\n\nWarning: could not save to journal: {e}"
+        save_error = exc
 
     context.user_data.pop(AWAITING_WEEKLY, None)
-    await update.message.reply_text(
-        format_detected_success("weekly", format_parsed_weekly(parsed), save_note)
+    await _reply_with_template(
+        update,
+        TemplateId.CHECKIN_RESULT,
+        {
+            "checkin_type": "weekly",
+            "parsed": parsed,
+            "saved_path": saved_path,
+            "save_error": save_error,
+        },
     )
 
 
@@ -356,7 +313,7 @@ async def handle_detected_checkin_text(
     detected = CheckupParser.detect_type(raw)
 
     if detected == "unknown":
-        await update.message.reply_text(format_unknown_payload_message())
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "unknown_payload"})
         return
 
     if detected == "daily":
@@ -377,8 +334,13 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def scheduled_checkup_prompt(context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = context.bot_data["checkup_chat_id"]
-    text = DAILY_PROMPT if context.job.data == "daily" else WEEKLY_PROMPT
-    await context.bot.send_message(chat_id=chat_id, text=text)
+    text_key = "daily_prompt" if context.job.data == "daily" else "weekly_prompt"
+    await _send_with_template(
+        context.bot,
+        chat_id=chat_id,
+        template=TemplateId.TEXT,
+        message={"text_key": text_key},
+    )
 
 
 async def post_init(application: Application) -> None:

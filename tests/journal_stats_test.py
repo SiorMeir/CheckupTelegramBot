@@ -1,7 +1,7 @@
 from datetime import date
 
 from journal.read import JournalReader
-from journal.stats import compute_daily_averages, format_statistics_report
+from journal.stats import compute_daily_averages
 from journal.store import JournalStore
 
 
@@ -75,7 +75,7 @@ def test_collect_daily_returns_empty_for_missing_journal(tmp_path):
     assert collection.date_max is None
 
 
-def test_compute_and_format_full_statistics_report(tmp_path):
+def test_compute_daily_averages_for_full_collection(tmp_path):
     root = tmp_path / "journal"
     _write_daily(
         root,
@@ -91,33 +91,18 @@ def test_compute_and_format_full_statistics_report(tmp_path):
     collection = reader.collect_daily(2, today=date(2026, 5, 25))
 
     averages = compute_daily_averages(collection)
-    report = format_statistics_report("2d", collection)
 
     assert averages is not None
     assert averages.energy == 6.0
     assert averages.focus == 6.0
     assert averages.satisfaction == 7.0
-    assert "Statistics · 2d" in report
-    assert "2 days · 2026-05-24 – 2026-05-25" in report
-    assert "Energy 6.0 · Focus 6.0 · Satisfaction 7.0" in report
 
 
-def test_format_partial_and_empty_statistics_report(tmp_path):
-    root = tmp_path / "journal"
-    _write_daily(
-        root,
-        date(2026, 5, 25),
-        "type: daily\nenergy: 8\nfocus: 6\nsatisfaction: 7",
-    )
-    reader = JournalReader(JournalStore(root))
+def test_compute_daily_averages_returns_none_for_empty_collection(tmp_path):
+    reader = JournalReader(JournalStore(tmp_path / "journal"))
 
-    partial_collection = reader.collect_daily(3, today=date(2026, 5, 25))
-    partial_report = format_statistics_report("3d", partial_collection)
-    empty_report = format_statistics_report(
-        "4w",
-        reader.collect_daily(28, today=date(2026, 5, 1)),
+    averages = compute_daily_averages(
+        reader.collect_daily(28, today=date(2026, 5, 1))
     )
 
-    assert "Partial: 1 of 3 days · 2026-05-25 – 2026-05-25" in partial_report
-    assert "Energy 8.0 · Focus 6.0 · Satisfaction 7.0" in partial_report
-    assert empty_report == "No daily entries for 4w."
+    assert averages is None

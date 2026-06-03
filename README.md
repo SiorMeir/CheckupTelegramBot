@@ -23,8 +23,6 @@ The flow is intentionally lightweight:
 - you paste your markdown entry
 - the bot parses it, saves it, and replies with a readable summary
 
-⏰ Important: reminder prompts do not auto-arm input. After a reminder, you still need to send `/daily` or `/weekly`.
-
 ## 🧾 Example Entries
 
 ### Daily check-in
