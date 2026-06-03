@@ -19,6 +19,7 @@ Evidence rules:
 - Distinguish between strong patterns, weak signals, and missing data.
 - Do not overstate confidence.
 - If the dataset is sparse or inconsistent, say so directly.
+- If data is not rich enough to draw conclusions, say so directly and ask the user to articulate more details moving forward.
 
 Interpretation rules:
 - Treat daily check-ins as granular signals.
@@ -43,7 +44,7 @@ Output requirements:
 
 Important:
 - The user wants honest reflection, not praise for its own sake.
-- Be specific, grounded, and proportionate to the evidence.
+- Be specific, grounded, and proportionate to the evidence. Base all conclusions on the evidence provided.
 - Prefer actionable insight over generic self-help advice.
 - If there is not enough data, produce a limited but useful reflection instead of guessing.
 """
