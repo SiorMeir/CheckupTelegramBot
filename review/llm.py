@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_REVIEW_MAX_INPUT_TOKENS = 8000
 DEFAULT_LLM_TIMEOUT_SECONDS = 180
 
-
+LLM_PROVIDERS = {"OPENAI", "LOCAL"}
 class LLMConfigError(ValueError):
     pass
 
@@ -68,13 +68,10 @@ def _normalize_base_url(raw: str) -> str:
 
 def load_llm_config_from_env() -> LLMConfig:
     provider = os.environ.get("LLM_PROVIDER", "").strip().upper()
-    if provider not in {"OPENAI", "LOCAL"}:
-        raise LLMConfigError("LLM_PROVIDER must be OPENAI or LOCAL.")
+    if provider not in LLM_PROVIDERS:
+        raise LLMConfigError(f"LLM_PROVIDER must be one of: {', '.join(LLM_PROVIDERS)}.")
 
-    model = os.environ.get("LLM_MODEL", "").strip()
-    if not model:
-        raise LLMConfigError("LLM_MODEL is required.")
-
+    model = os.environ.get("LLM_MODEL", "").strip() # optional
     timeout_seconds = _parse_positive_int(
         os.environ.get("LLM_TIMEOUT_SECONDS"),
         "LLM_TIMEOUT_SECONDS",
@@ -91,7 +88,7 @@ def load_llm_config_from_env() -> LLMConfig:
         if not api_key:
             raise LLMConfigError("OPENAI_API_KEY is required when LLM_PROVIDER=OPENAI.")
         base_url = "https://api.openai.com/v1"
-    else:
+    elif provider == "LOCAL":
         raw_base_url = os.environ.get("LOCAL_BASE_URL", "")
         if not raw_base_url.strip():
             raise LLMConfigError("LOCAL_BASE_URL is required when LLM_PROVIDER=LOCAL.")
@@ -108,7 +105,7 @@ def load_llm_config_from_env() -> LLMConfig:
     )
 
 
-def estimate_input_tokens(system_prompt: str, user_content: str) -> int:
+def estimate_input_tokens(system_prompt: str, user_content: str) -> int: # each word is about 4 tokens
     total_characters = len(system_prompt) + len(user_content)
     return math.ceil(total_characters / 4)
 

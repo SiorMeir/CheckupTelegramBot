@@ -185,8 +185,9 @@ def test_review_command_formats_successful_reply(monkeypatch):
     assert "<b>Review | 2w</b>" in reply
     assert "Coverage: 12/14 daily, 1 weekly" in reply
     assert "Model: OPENAI/gpt-test" in reply
-    assert "<p><b>Positive trends</b></p>" in reply
-    assert "<ul><li>Strong week.</li><li><b>Visible</b> progress.</li></ul>" in reply
+    assert "<b>Positive trends</b>" in reply
+    assert "- Strong week." in reply
+    assert "- <b>Visible</b> progress." in reply
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 

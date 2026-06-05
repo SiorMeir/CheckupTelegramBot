@@ -36,7 +36,8 @@ class WeeklyReview:
 class CheckupParser:
     @staticmethod
     def detect_type(markdown: str) -> Literal["daily", "weekly", "unknown"]:
-        if re.search(r"^\s*##\s+Daily Check-In\s*$", markdown, re.MULTILINE):
+        if re.search(r"^\s*##\s+Daily Check-In\b.*$", markdown, re.MULTILINE):
+   
             return "daily"
 
         if re.search(r"^\s*##\s+.+\bReview\b\s*$", markdown, re.MULTILINE):

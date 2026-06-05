@@ -10,6 +10,8 @@ from journal.read import (
     DailyAveragesSummary,
     DailyCollection,
     DailyEntry,
+    JournalLogReport,
+    JournalScan,
     ReviewCollection,
     ReviewCoverage,
 )
@@ -47,9 +49,10 @@ def test_render_daily_success_escapes_html_and_renders_empty_lists():
     )
 
     assert "<b>Detected as daily.</b>" in rendered.text
-    assert "<li>Shipped &lt;feature&gt;</li>" in rendered.text
-    assert "<li>Keep &amp; improve</li>" in rendered.text
+    assert "- Shipped &lt;feature&gt;" in rendered.text
+    assert "- Keep &amp; improve" in rendered.text
     assert rendered.text.count("<i>(none)</i>") == 2
+    assert "<ul>" not in rendered.text
 
 
 def test_render_checkin_success_includes_optional_save_and_warning_blocks():
@@ -105,9 +108,11 @@ def test_render_review_report_converts_markdown_like_analysis_to_html():
         },
     )
 
-    assert "<p><b>Positive trends</b></p>" in rendered.text
-    assert "<ul><li>Energy rose from <b>3</b> to <b>5</b>.</li></ul>" in rendered.text
-    assert "<p>Plain line.</p>" in rendered.text
+    assert "<b>Positive trends</b>" in rendered.text
+    assert "- Energy rose from <b>3</b> to <b>5</b>." in rendered.text
+    assert "Plain line." in rendered.text
+    assert "<p>" not in rendered.text
+    assert "<ul>" not in rendered.text
 
 
 def test_render_statistics_report_formats_range_and_scores():
@@ -128,6 +133,27 @@ def test_render_statistics_report_formats_range_and_scores():
     assert "<b>Statistics | 4w</b>" in rendered.text
     assert "Partial: 2 of 28 days | 2026-05-24 - 2026-05-25" in rendered.text
     assert "Energy 6.0 | Focus 5.0 | Satisfaction 7.0" in rendered.text
+
+
+def test_render_log_report_formats_missing_coverage():
+    renderer = TelegramMessageRenderer()
+    report = JournalLogReport(
+        scan=JournalScan(records=[], today=date(2026, 6, 1)),
+        daily_count=10,
+        weekly_count=1,
+        oldest_entry_date=date(2026, 5, 19),
+        weekly_gaps=[],
+        verbose=True,
+    )
+
+    rendered = renderer.render(
+        TemplateId.LOG_REPORT,
+        {"report": report},
+    )
+
+    assert "<b>Journal Log</b>" in rendered.text
+    assert "Daily entries: 10" in rendered.text
+    assert "No missing daily or weekly entries." in rendered.text
 
 
 def test_render_unknown_template_raises_value_error():

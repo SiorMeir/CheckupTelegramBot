@@ -98,7 +98,7 @@ def test_weekly_handler_calls_store_on_valid_weekly(monkeypatch):
     reply = update.message.reply_text.await_args.args[0]
     assert "Detected as weekly." in reply
     assert "<b>Parsed weekly review</b>" in reply
-    assert "<ul>" in reply
+    assert "- Daily coding sessions worked well" in reply
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 

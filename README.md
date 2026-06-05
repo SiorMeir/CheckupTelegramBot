@@ -10,6 +10,8 @@ Send markdown, get a clean parsed summary back, and keep every entry stored loca
 - stores entries as local files in `journal/daily/` and `journal/weekly/`
 - replies with a structured summary after each successful submission
 - sends scheduled reminder prompts to a configured Telegram chat
+- reports journal coverage and missing gaps with `/log` and `/log verbose`
+- exports all saved journal markdown files as a ZIP with `/dump`
 - Send the journal corpus to a configured LLM for quick analysis & trend discovery
 
 ## 💬 UX In Practice
@@ -19,6 +21,9 @@ The flow is intentionally lightweight:
 - `/start` gives a short greeting
 - `/daily` arms your next message as a daily check-in
 - `/weekly` arms your next message as a weekly review
+- `/log` counts valid daily and weekly entries and reports the oldest saved entry
+- `/log verbose` adds week-by-week missing daily dates and missing completed weekly reviews
+- `/dump` packages the raw journal markdown files for download
 - `/review 2w` analyzes the last 14 days using whatever daily and weekly data exists in that window
 - you paste your markdown entry
 - the bot parses it, saves it, and replies with a readable summary

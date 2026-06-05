@@ -13,6 +13,8 @@
 - /weekly - submit weekly review
 - /statistics - get averages of daily review marks
 - /review [month | quarter]- submit aggregated data of X days. has an argument for time period
+- /log - count number of entries of each type available and returns them
+- /dump - gather all .md files on mounted storage and bundles them as a downloadable file or compressed file
 
 ### Technical design
 - python as main programming language
@@ -31,8 +33,17 @@
     ├── weekly/
     │   ├── 2026-week-20.md
     │   └── ...
+- files will be in .md format for LLM ingestion, with enrichment by frontmatter metadata (applicable to daily entries)
 - scale: single user
 
+### Observabillity
+- logs should be taken at key points of each command flow
+- metrics will be gathered 
+- As this suppose to be k8s native, This project should integrate with k8s native observabillity tools.
+- The service should expose metric scraping endpoint for Prometheus
+- Logs should be stored for a short term in a suitable k8s solution
+- example manifests should be detailed in `deployement` folder
+    - later: Grafana visuals
 ### Operational notes
 - generated entries under `journal/daily/` and `journal/weekly/` are runtime data and should not be committed
 - Docker images should not include local `.env` files, kubeconfigs, or journal output

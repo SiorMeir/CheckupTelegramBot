@@ -4,11 +4,13 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
 from pathlib import Path
+from typing import Literal
 
 import yaml
 
 from journal.period import ReviewPeriodSpec
 from journal.store import DAILY_DIR, ILS_TZ, JournalStore, WEEKLY_DIR
+from journal.week import week_bounds, week_bounds_from_label, week_label
 from parser import CheckupParser, DailyCheckIn, WeeklyReview
 
 logger = logging.getLogger(__name__)
@@ -90,6 +92,99 @@ class ReviewCollection:
     weekly_entries: list[ReviewWeeklyEntry]
     coverage: ReviewCoverage
     daily_averages: DailyAveragesSummary
+
+
+@dataclass(frozen=True)
+class JournalFileRecord:
+    kind: Literal["daily", "weekly"]
+    path: Path
+    is_valid: bool
+    entry_date: date | None = None
+    saved_date: date | None = None
+    week_label: str | None = None
+    week_start: date | None = None
+    week_end: date | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class JournalScan:
+    records: list[JournalFileRecord]
+    today: date
+
+    @property
+    def valid_records(self) -> list[JournalFileRecord]:
+        return [record for record in self.records if record.is_valid]
+
+    @property
+    def valid_daily_records(self) -> list[JournalFileRecord]:
+        return [
+            record
+            for record in self.valid_records
+            if record.kind == "daily" and record.entry_date is not None
+        ]
+
+    @property
+    def valid_weekly_records(self) -> list[JournalFileRecord]:
+        return [
+            record
+            for record in self.valid_records
+            if record.kind == "weekly" and record.saved_date is not None
+        ]
+
+    @property
+    def valid_daily_dates(self) -> list[date]:
+        return sorted(record.entry_date for record in self.valid_daily_records if record.entry_date)
+
+    @property
+    def valid_weekly_weeks(self) -> list[str]:
+        labels = {
+            record.week_label
+            for record in self.valid_weekly_records
+            if record.week_label is not None
+        }
+        return sorted(labels)
+
+    @property
+    def oldest_valid_entry_date(self) -> date | None:
+        dates = [
+            value
+            for record in self.valid_records
+            for value in (record.entry_date, record.saved_date)
+            if value is not None
+        ]
+        if not dates:
+            return None
+        return min(dates)
+
+    @property
+    def coverage_start(self) -> date | None:
+        return self.oldest_valid_entry_date
+
+
+@dataclass(frozen=True)
+class JournalMissingWeek:
+    week_label: str
+    week_start: date
+    week_end: date
+    missing_daily_dates: list[date]
+    missing_weekly_review: bool
+
+
+@dataclass(frozen=True)
+class JournalLogReport:
+    scan: JournalScan
+    daily_count: int
+    weekly_count: int
+    oldest_entry_date: date | None
+    weekly_gaps: list[JournalMissingWeek]
+    verbose: bool
+
+    @property
+    def has_missing_entries(self) -> bool:
+        return any(
+            gap.missing_daily_dates or gap.missing_weekly_review for gap in self.weekly_gaps
+        )
 
 
 class JournalReader:
@@ -180,16 +275,58 @@ class JournalReader:
             tomorrow_focus=parsed.tomorrow_focus,
         )
 
-    def _parse_weekly_saved_date(self, data: dict) -> date:
-        raw = data.get("date")
-        if isinstance(raw, date):
-            return raw
-        if not isinstance(raw, str):
-            raise ValueError("Weekly frontmatter is missing date")
+    def _parse_frontmatter_date(self, value: object, *, field_name: str) -> date:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        if not isinstance(value, str):
+            raise ValueError(f"{field_name} is missing")
         try:
-            return date.fromisoformat(raw)
+            return date.fromisoformat(value)
         except ValueError as exc:
-            raise ValueError("Weekly frontmatter date is invalid") from exc
+            raise ValueError(f"{field_name} is invalid") from exc
+
+    def _parse_optional_frontmatter_date(self, value: object) -> date | None:
+        if value is None:
+            return None
+        return self._parse_frontmatter_date(value, field_name="Frontmatter date")
+
+    def _safe_optional_frontmatter_date(self, value: object) -> date | None:
+        try:
+            return self._parse_optional_frontmatter_date(value)
+        except ValueError:
+            return None
+
+    def _parse_weekly_saved_date(self, data: dict) -> date:
+        try:
+            return self._parse_frontmatter_date(data.get("date"), field_name="Weekly frontmatter date")
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+
+    def _extract_week_metadata(
+        self,
+        data: dict,
+        *,
+        fallback_label: str | None,
+    ) -> tuple[str | None, date | None, date | None]:
+        label = data.get("week") if isinstance(data.get("week"), str) else fallback_label
+        week_start = self._safe_optional_frontmatter_date(data.get("week_start"))
+        week_end = self._safe_optional_frontmatter_date(data.get("week_end"))
+
+        if week_start is not None and week_end is not None:
+            if label is None:
+                label = week_label(week_end)
+            return label, week_start, week_end
+
+        if label is not None:
+            try:
+                derived_start, derived_end = week_bounds_from_label(label)
+            except ValueError:
+                return label, week_start, week_end
+            return label, derived_start, derived_end
+
+        return None, week_start, week_end
 
     def _parse_weekly_review_file(self, path: Path) -> ReviewWeeklyEntry:
         data, body = self._read_markdown_file(path)
@@ -202,10 +339,11 @@ class JournalReader:
             raise ValueError("Journal body did not parse as a weekly review")
 
         saved_date = self._parse_weekly_saved_date(data)
-        week_label = data.get("week") if isinstance(data.get("week"), str) else ""
+        week_label_value, _, _ = self._extract_week_metadata(data, fallback_label=path.stem)
+        week_label_text = week_label_value if isinstance(week_label_value, str) else ""
 
         return ReviewWeeklyEntry(
-            week=week_label,
+            week=week_label_text,
             saved_date=saved_date,
             momentum=parsed.momentum,
             friction=parsed.friction,
@@ -229,6 +367,177 @@ class JournalReader:
         while current <= end_date:
             yield current
             current += timedelta(days=1)
+
+    def _scan_daily_file(self, path: Path) -> JournalFileRecord:
+        try:
+            entry_date = date.fromisoformat(path.stem)
+        except ValueError:
+            return JournalFileRecord(
+                kind="daily",
+                path=path,
+                is_valid=False,
+                error="Invalid daily filename",
+            )
+
+        try:
+            self._parse_daily_review_file(path, entry_date)
+        except ValueError as exc:
+            return JournalFileRecord(
+                kind="daily",
+                path=path,
+                is_valid=False,
+                entry_date=entry_date,
+                error=str(exc),
+            )
+
+        return JournalFileRecord(
+            kind="daily",
+            path=path,
+            is_valid=True,
+            entry_date=entry_date,
+        )
+
+    def _scan_weekly_file(self, path: Path) -> JournalFileRecord:
+        fallback_label = path.stem
+        try:
+            data, body = self._read_markdown_file(path)
+        except ValueError as exc:
+            week_start = None
+            week_end = None
+            try:
+                week_start, week_end = week_bounds_from_label(fallback_label)
+            except ValueError:
+                pass
+            return JournalFileRecord(
+                kind="weekly",
+                path=path,
+                is_valid=False,
+                week_label=fallback_label,
+                week_start=week_start,
+                week_end=week_end,
+                error=str(exc),
+            )
+
+        week_label_value, week_start, week_end = self._extract_week_metadata(
+            data,
+            fallback_label=fallback_label,
+        )
+
+        try:
+            if data.get("type") != "weekly":
+                raise ValueError("Frontmatter type is not weekly")
+            parsed = CheckupParser.parse(body)
+            if not isinstance(parsed, WeeklyReview):
+                raise ValueError("Journal body did not parse as a weekly review")
+            saved_date = self._parse_weekly_saved_date(data)
+        except ValueError as exc:
+            return JournalFileRecord(
+                kind="weekly",
+                path=path,
+                is_valid=False,
+                saved_date=self._safe_optional_frontmatter_date(data.get("date")),
+                week_label=week_label_value,
+                week_start=week_start,
+                week_end=week_end,
+                error=str(exc),
+            )
+
+        return JournalFileRecord(
+            kind="weekly",
+            path=path,
+            is_valid=True,
+            saved_date=saved_date,
+            week_label=week_label_value,
+            week_start=week_start,
+            week_end=week_end,
+        )
+
+    def scan_journal(
+        self,
+        *,
+        today: date | datetime | None = None,
+    ) -> JournalScan:
+        records: list[JournalFileRecord] = []
+
+        daily_dir = self._daily_dir()
+        if daily_dir.exists():
+            for path in sorted(daily_dir.glob("*.md")):
+                records.append(self._scan_daily_file(path))
+
+        weekly_dir = self._weekly_dir()
+        if weekly_dir.exists():
+            for path in sorted(weekly_dir.glob("*.md")):
+                records.append(self._scan_weekly_file(path))
+
+        return JournalScan(records=records, today=self._today(today))
+
+    def collect_log_report(
+        self,
+        *,
+        today: date | datetime | None = None,
+        verbose: bool = False,
+    ) -> JournalLogReport:
+        scan = self.scan_journal(today=today)
+        daily_count = len(scan.valid_daily_records)
+        weekly_count = len(scan.valid_weekly_records)
+        oldest_entry_date = scan.oldest_valid_entry_date
+
+        if not verbose or oldest_entry_date is None:
+            return JournalLogReport(
+                scan=scan,
+                daily_count=daily_count,
+                weekly_count=weekly_count,
+                oldest_entry_date=oldest_entry_date,
+                weekly_gaps=[],
+                verbose=verbose,
+            )
+
+        valid_daily_dates = set(scan.valid_daily_dates)
+        valid_weekly_labels = set(scan.valid_weekly_weeks)
+        weekly_gaps: list[JournalMissingWeek] = []
+
+        current_week_start, _ = week_bounds(scan.today)
+        current_start, _ = week_bounds(oldest_entry_date)
+
+        while current_start <= scan.today:
+            current_end = current_start + timedelta(days=6)
+            current_label = week_label(current_end)
+            range_start = max(current_start, oldest_entry_date)
+            range_end = min(current_end, scan.today)
+
+            missing_daily_dates: list[date] = []
+            current_day = range_start
+            while current_day <= range_end:
+                if current_day not in valid_daily_dates:
+                    missing_daily_dates.append(current_day)
+                current_day += timedelta(days=1)
+
+            missing_weekly_review = (
+                current_end < current_week_start
+                and current_label not in valid_weekly_labels
+            )
+
+            if missing_daily_dates or missing_weekly_review:
+                weekly_gaps.append(
+                    JournalMissingWeek(
+                        week_label=current_label,
+                        week_start=current_start,
+                        week_end=current_end,
+                        missing_daily_dates=missing_daily_dates,
+                        missing_weekly_review=missing_weekly_review,
+                    )
+                )
+
+            current_start += timedelta(days=7)
+
+        return JournalLogReport(
+            scan=scan,
+            daily_count=daily_count,
+            weekly_count=weekly_count,
+            oldest_entry_date=oldest_entry_date,
+            weekly_gaps=weekly_gaps,
+            verbose=True,
+        )
 
     def collect_daily(
         self,

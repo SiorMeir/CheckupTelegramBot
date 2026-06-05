@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from journal.week import week_bounds, week_label
 from parser import DailyCheckIn, WeeklyReview
 
 DAILY_DIR = "daily"
@@ -28,16 +29,10 @@ class JournalStore:
         return f"{when.strftime('%Y-%m-%d')}.md"
 
     def _weekly_bounds(self, day: date) -> tuple[date, date]:
-        # Sunday-Saturday week.
-        delta = (day.weekday() - 6) % 7
-        start_date = day - timedelta(days=delta)
-        return start_date, start_date + timedelta(days=6)
+        return week_bounds(day)
 
     def _weekly_label(self, day: date) -> str:
-        start_date, end_date = self._weekly_bounds(day)
-        first_week_end = self._weekly_bounds(date(end_date.year, 1, 1))[1]
-        week_number = ((end_date - first_week_end).days // 7) + 1
-        return f"{end_date.year}-week-{week_number:02d}"
+        return week_label(day)
 
     def _weekly_filename(self, when: datetime) -> str:
         return f"{self._weekly_label(when.date())}.md"

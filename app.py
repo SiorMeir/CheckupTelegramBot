@@ -2,9 +2,11 @@ import json
 import logging
 import os
 from datetime import time
+from pathlib import Path
 from typing import Any, Mapping
 
 from dotenv import load_dotenv
+from journal.export import build_journal_archive
 from journal.period import parse_period, parse_review_period
 from journal.read import JournalReader, ReviewCollection
 from journal.store import ILS_TZ, JournalStore
@@ -72,6 +74,19 @@ async def _send_with_template(
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _reply_with_template(update, TemplateId.TEXT, {"text_key": "start"})
+
+
+def _format_size(size: int) -> str:
+    return f"{size} bytes"
+
+
+def _cleanup_archive(path: Path, *, cleanup: bool) -> None:
+    if not cleanup:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        logger.warning("Could not remove temporary archive %s", path)
 
 
 def _serialize_review_collection(collection: ReviewCollection) -> str:
@@ -162,6 +177,84 @@ async def statistics_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "collection": collection,
         },
     )
+
+
+async def log_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) > 1 or (
+        context.args and context.args[0].strip().lower() != "verbose"
+    ):
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "log_usage"})
+        return
+
+    report = journal_reader.collect_log_report(verbose=bool(context.args))
+    if report.oldest_entry_date is None:
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "log_empty"})
+        return
+
+    await _reply_with_template(update, TemplateId.LOG_REPORT, {"report": report})
+
+
+async def dump_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.args:
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "dump_usage"})
+        return
+
+    try:
+        scan = journal_reader.scan_journal()
+        archive = build_journal_archive(journal_store, scan)
+    except OSError as exc:
+        logger.exception("Dump command failed while building archive")
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "dump_failed", "error": exc},
+        )
+        return
+
+    if archive.status == "empty":
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "dump_empty"})
+        return
+
+    if archive.status == "too_large":
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {
+                "text_key": "dump_too_large",
+                "archive_size": _format_size(archive.archive_size),
+                "upload_limit": _format_size(archive.upload_limit),
+                "file_count": archive.file_count,
+                "archive_path": archive.archive_path,
+            },
+        )
+        return
+
+    if archive.archive_path is None:
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "dump_failed", "error": "Archive path was not created"},
+        )
+        return
+
+    try:
+        await update.message.reply_document(
+            document=archive.archive_path,
+            filename=archive.archive_path.name,
+            caption=(
+                f"Journal export | {archive.file_count} files | "
+                f"{_format_size(archive.archive_size)}"
+            ),
+        )
+    except Exception as exc:
+        logger.exception("Dump command failed while sending archive")
+        await _reply_with_template(
+            update,
+            TemplateId.TEXT,
+            {"text_key": "dump_failed", "error": exc},
+        )
+    finally:
+        _cleanup_archive(archive.archive_path, cleanup=archive.cleanup_after_send)
 
 
 async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -380,8 +473,9 @@ async def post_init(application: Application) -> None:
 
 
 def main():
-    load_dotenv()
     bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "YOUR_BOT_TOKEN_HERE")
+    if os.environ.get("DEV_MODE") == "true":
+        load_dotenv(override=True)
 
     app = (
         ApplicationBuilder()
@@ -394,6 +488,8 @@ def main():
     app.add_handler(CommandHandler("daily", daily_command))
     app.add_handler(CommandHandler("weekly", weekly_command))
     app.add_handler(CommandHandler("statistics", statistics_command))
+    app.add_handler(CommandHandler("log", log_command))
+    app.add_handler(CommandHandler("dump", dump_command))
     app.add_handler(CommandHandler("review", review_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
 

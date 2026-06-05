@@ -8,7 +8,7 @@ import re
 from string import Template
 from typing import Any, Mapping
 
-from journal.read import DailyCollection, ReviewCollection
+from journal.read import DailyCollection, JournalLogReport, ReviewCollection
 from journal.stats import compute_daily_averages
 from journal.store import ILS_TZ
 from parser import DailyCheckIn, WeeklyReview
@@ -21,6 +21,7 @@ class TemplateId(StrEnum):
     TEXT = "text"
     CHECKIN_RESULT = "checkin_result"
     STATISTICS_REPORT = "statistics_report"
+    LOG_REPORT = "log_report"
     REVIEW_REPORT = "review_report"
 
 
@@ -69,6 +70,8 @@ class TelegramMessageRenderer:
             return self._build_checkin_result(message)
         if template == TemplateId.STATISTICS_REPORT:
             return self._build_statistics_report(message)
+        if template == TemplateId.LOG_REPORT:
+            return self._build_log_report(message)
         if template == TemplateId.REVIEW_REPORT:
             return self._build_review_report(message)
         raise ValueError(f"Unsupported template: {template!r}")
@@ -131,6 +134,56 @@ class TelegramMessageRenderer:
             "scores": escape(scores),
         }
 
+    def _build_log_report(self, message: Mapping[str, Any]) -> dict[str, str]:
+        report = message["report"]
+        if not isinstance(report, JournalLogReport):
+            raise TypeError("report must be a JournalLogReport")
+
+        oldest = (
+            report.oldest_entry_date.isoformat()
+            if report.oldest_entry_date is not None
+            else "n/a"
+        )
+        summary_lines = [
+            f"Daily entries: {report.daily_count}",
+            f"Weekly entries: {report.weekly_count}",
+            f"Oldest entry: {oldest}",
+        ]
+        summary_html = escape("\n".join(summary_lines))
+
+        if not report.verbose:
+            return {
+                "summary_html": summary_html,
+                "details_html": "",
+            }
+
+        if not report.has_missing_entries:
+            details_html = "\n\nNo missing daily or weekly entries."
+            return {
+                "summary_html": summary_html,
+                "details_html": escape(details_html),
+            }
+
+        blocks: list[str] = ["<b>Missing coverage</b>"]
+        for gap in report.weekly_gaps:
+            lines = [
+                (
+                    f"<b>{escape(gap.week_label)}</b> | "
+                    f"{escape(gap.week_start.isoformat())} - {escape(gap.week_end.isoformat())}"
+                )
+            ]
+            if gap.missing_daily_dates:
+                dates = ", ".join(day.isoformat() for day in gap.missing_daily_dates)
+                lines.append(f"Daily gaps: {escape(dates)}")
+            if gap.missing_weekly_review:
+                lines.append("Weekly review: missing")
+            blocks.append("\n".join(lines))
+
+        return {
+            "summary_html": summary_html,
+            "details_html": "\n\n" + "\n\n".join(blocks),
+        }
+
     def _build_review_report(self, message: Mapping[str, Any]) -> dict[str, str]:
         collection = message["collection"]
         if not isinstance(collection, ReviewCollection):
@@ -189,8 +242,7 @@ class TelegramMessageRenderer:
     def _render_list(self, items: list[str]) -> str:
         if not items:
             return "<i>(none)</i>"
-        rendered_items = "".join(f"<li>{escape(item)}</li>" for item in items)
-        return f"<ul>{rendered_items}</ul>"
+        return "\n".join(f"- {escape(item)}" for item in items)
 
     def _render_save_note(
         self,
@@ -221,13 +273,12 @@ class TelegramMessageRenderer:
 
         def flush_paragraph() -> None:
             if paragraph_lines:
-                blocks.append(f"<p>{'<br/>'.join(paragraph_lines)}</p>")
+                blocks.append("\n".join(paragraph_lines))
                 paragraph_lines.clear()
 
         def flush_list() -> None:
             if list_items:
-                items_html = "".join(f"<li>{item}</li>" for item in list_items)
-                blocks.append(f"<ul>{items_html}</ul>")
+                blocks.append("\n".join(f"- {item}" for item in list_items))
                 list_items.clear()
 
         for raw_line in text.splitlines():
@@ -247,4 +298,4 @@ class TelegramMessageRenderer:
 
         flush_paragraph()
         flush_list()
-        return "\n".join(blocks)
+        return "\n\n".join(blocks)
