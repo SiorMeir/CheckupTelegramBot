@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 import logging
 from pathlib import Path
+import time as perf_clock
 from typing import Literal
 
 import yaml
@@ -11,6 +12,12 @@ import yaml
 from journal.period import ReviewPeriodSpec
 from journal.store import DAILY_DIR, ILS_TZ, JournalStore, WEEKLY_DIR
 from journal.week import week_bounds, week_bounds_from_label, week_label
+from observability import (
+    log_event,
+    measure_duration_seconds,
+    observe_journal_invalid_file,
+    observe_journal_operation,
+)
 from parser import CheckupParser, DailyCheckIn, WeeklyReview
 
 logger = logging.getLogger(__name__)
@@ -230,6 +237,33 @@ class JournalReader:
 
         return data, body
 
+    def _classify_invalid_reason(self, error: str) -> str:
+        if "filename" in error.lower():
+            return "invalid_filename"
+        if "type is not" in error:
+            return "type_mismatch"
+        if "date is invalid" in error or "date is missing" in error:
+            return "date_error"
+        if (
+            "frontmatter" in error.lower()
+            or "opening frontmatter delimiter" in error.lower()
+            or "closing frontmatter delimiter" in error.lower()
+        ):
+            return "frontmatter"
+        return "parse_error"
+
+    def _record_invalid_file(self, kind: str, path: Path, error: str) -> None:
+        reason = self._classify_invalid_reason(error)
+        observe_journal_invalid_file(kind, reason)
+        log_event(
+            logger,
+            logging.WARNING,
+            "journal_file_skipped",
+            kind=kind,
+            path=str(path),
+            reason=reason,
+        )
+
     def _parse_daily_file(self, path: Path, expected_date: date) -> DailyEntry:
         data, _ = self._read_markdown_file(path)
 
@@ -359,7 +393,7 @@ class JournalReader:
             try:
                 dates.append(date.fromisoformat(path.stem))
             except ValueError:
-                logger.warning("Skipping daily file with invalid filename: %s", path)
+                self._record_invalid_file("daily", path, "Invalid daily filename")
         return sorted(dates)
 
     def _iter_review_dates(self, start_date: date, end_date: date):
@@ -457,19 +491,47 @@ class JournalReader:
         *,
         today: date | datetime | None = None,
     ) -> JournalScan:
+        started_at = perf_clock.perf_counter()
         records: list[JournalFileRecord] = []
 
-        daily_dir = self._daily_dir()
-        if daily_dir.exists():
-            for path in sorted(daily_dir.glob("*.md")):
-                records.append(self._scan_daily_file(path))
+        try:
+            daily_dir = self._daily_dir()
+            if daily_dir.exists():
+                for path in sorted(daily_dir.glob("*.md")):
+                    record = self._scan_daily_file(path)
+                    if not record.is_valid and record.error is not None:
+                        self._record_invalid_file("daily", path, record.error)
+                    records.append(record)
 
-        weekly_dir = self._weekly_dir()
-        if weekly_dir.exists():
-            for path in sorted(weekly_dir.glob("*.md")):
-                records.append(self._scan_weekly_file(path))
+            weekly_dir = self._weekly_dir()
+            if weekly_dir.exists():
+                for path in sorted(weekly_dir.glob("*.md")):
+                    record = self._scan_weekly_file(path)
+                    if not record.is_valid and record.error is not None:
+                        self._record_invalid_file("weekly", path, record.error)
+                    records.append(record)
 
-        return JournalScan(records=records, today=self._today(today))
+            scan = JournalScan(records=records, today=self._today(today))
+        except Exception:
+            observe_journal_operation(
+                "scan_journal",
+                "error",
+                measure_duration_seconds(started_at),
+            )
+            raise
+
+        duration_seconds = measure_duration_seconds(started_at)
+        observe_journal_operation("scan_journal", "success", duration_seconds)
+        log_event(
+            logger,
+            logging.INFO,
+            "journal_scan_complete",
+            record_count=len(scan.records),
+            valid_daily_count=len(scan.valid_daily_records),
+            valid_weekly_count=len(scan.valid_weekly_records),
+            duration_ms=round(duration_seconds * 1000, 3),
+        )
+        return scan
 
     def collect_log_report(
         self,
@@ -477,67 +539,83 @@ class JournalReader:
         today: date | datetime | None = None,
         verbose: bool = False,
     ) -> JournalLogReport:
-        scan = self.scan_journal(today=today)
-        daily_count = len(scan.valid_daily_records)
-        weekly_count = len(scan.valid_weekly_records)
-        oldest_entry_date = scan.oldest_valid_entry_date
+        started_at = perf_clock.perf_counter()
+        try:
+            scan = self.scan_journal(today=today)
+            daily_count = len(scan.valid_daily_records)
+            weekly_count = len(scan.valid_weekly_records)
+            oldest_entry_date = scan.oldest_valid_entry_date
 
-        if not verbose or oldest_entry_date is None:
-            return JournalLogReport(
-                scan=scan,
-                daily_count=daily_count,
-                weekly_count=weekly_count,
-                oldest_entry_date=oldest_entry_date,
-                weekly_gaps=[],
-                verbose=verbose,
-            )
-
-        valid_daily_dates = set(scan.valid_daily_dates)
-        valid_weekly_labels = set(scan.valid_weekly_weeks)
-        weekly_gaps: list[JournalMissingWeek] = []
-
-        current_week_start, _ = week_bounds(scan.today)
-        current_start, _ = week_bounds(oldest_entry_date)
-
-        while current_start <= scan.today:
-            current_end = current_start + timedelta(days=6)
-            current_label = week_label(current_end)
-            range_start = max(current_start, oldest_entry_date)
-            range_end = min(current_end, scan.today)
-
-            missing_daily_dates: list[date] = []
-            current_day = range_start
-            while current_day <= range_end:
-                if current_day not in valid_daily_dates:
-                    missing_daily_dates.append(current_day)
-                current_day += timedelta(days=1)
-
-            missing_weekly_review = (
-                current_end < current_week_start
-                and current_label not in valid_weekly_labels
-            )
-
-            if missing_daily_dates or missing_weekly_review:
-                weekly_gaps.append(
-                    JournalMissingWeek(
-                        week_label=current_label,
-                        week_start=current_start,
-                        week_end=current_end,
-                        missing_daily_dates=missing_daily_dates,
-                        missing_weekly_review=missing_weekly_review,
-                    )
+            if not verbose or oldest_entry_date is None:
+                report = JournalLogReport(
+                    scan=scan,
+                    daily_count=daily_count,
+                    weekly_count=weekly_count,
+                    oldest_entry_date=oldest_entry_date,
+                    weekly_gaps=[],
+                    verbose=verbose,
                 )
+            else:
+                valid_daily_dates = set(scan.valid_daily_dates)
+                valid_weekly_labels = set(scan.valid_weekly_weeks)
+                weekly_gaps: list[JournalMissingWeek] = []
 
-            current_start += timedelta(days=7)
+                current_week_start, _ = week_bounds(scan.today)
+                current_start, _ = week_bounds(oldest_entry_date)
 
-        return JournalLogReport(
-            scan=scan,
-            daily_count=daily_count,
-            weekly_count=weekly_count,
-            oldest_entry_date=oldest_entry_date,
-            weekly_gaps=weekly_gaps,
-            verbose=True,
+                while current_start <= scan.today:
+                    current_end = current_start + timedelta(days=6)
+                    current_label = week_label(current_end)
+                    range_start = max(current_start, oldest_entry_date)
+                    range_end = min(current_end, scan.today)
+
+                    missing_daily_dates: list[date] = []
+                    current_day = range_start
+                    while current_day <= range_end:
+                        if current_day not in valid_daily_dates:
+                            missing_daily_dates.append(current_day)
+                        current_day += timedelta(days=1)
+
+                    missing_weekly_review = (
+                        current_end < current_week_start
+                        and current_label not in valid_weekly_labels
+                    )
+
+                    if missing_daily_dates or missing_weekly_review:
+                        weekly_gaps.append(
+                            JournalMissingWeek(
+                                week_label=current_label,
+                                week_start=current_start,
+                                week_end=current_end,
+                                missing_daily_dates=missing_daily_dates,
+                                missing_weekly_review=missing_weekly_review,
+                            )
+                        )
+
+                    current_start += timedelta(days=7)
+
+                report = JournalLogReport(
+                    scan=scan,
+                    daily_count=daily_count,
+                    weekly_count=weekly_count,
+                    oldest_entry_date=oldest_entry_date,
+                    weekly_gaps=weekly_gaps,
+                    verbose=True,
+                )
+        except Exception:
+            observe_journal_operation(
+                "collect_log_report",
+                "error",
+                measure_duration_seconds(started_at),
+            )
+            raise
+
+        observe_journal_operation(
+            "collect_log_report",
+            "success",
+            measure_duration_seconds(started_at),
         )
+        return report
 
     def collect_daily(
         self,
@@ -545,85 +623,124 @@ class JournalReader:
         *,
         today: date | datetime | None = None,
     ) -> DailyCollection:
-        daily_dir = self._daily_dir()
-        if not daily_dir.exists():
-            return DailyCollection(entries=[], target_days=target_days)
+        started_at = perf_clock.perf_counter()
+        try:
+            daily_dir = self._daily_dir()
+            if not daily_dir.exists():
+                collection = DailyCollection(entries=[], target_days=target_days)
+            else:
+                available_dates = self._available_daily_dates(daily_dir)
+                if not available_dates:
+                    collection = DailyCollection(entries=[], target_days=target_days)
+                else:
+                    current = self._today(today)
+                    earliest = available_dates[0]
+                    entries: list[DailyEntry] = []
 
-        available_dates = self._available_daily_dates(daily_dir)
-        if not available_dates:
-            return DailyCollection(entries=[], target_days=target_days)
+                    while current >= earliest and len(entries) < target_days:
+                        path = daily_dir / f"{current.isoformat()}.md"
+                        if path.is_file():
+                            try:
+                                entries.append(self._parse_daily_file(path, current))
+                            except ValueError as exc:
+                                self._record_invalid_file("daily", path, str(exc))
+                        current -= timedelta(days=1)
 
-        current = self._today(today)
-        earliest = available_dates[0]
-        entries: list[DailyEntry] = []
+                    entries.sort(key=lambda entry: entry.entry_date)
+                    collection = DailyCollection(entries=entries, target_days=target_days)
+        except Exception:
+            observe_journal_operation(
+                "collect_daily",
+                "error",
+                measure_duration_seconds(started_at),
+            )
+            raise
 
-        while current >= earliest and len(entries) < target_days:
-            path = daily_dir / f"{current.isoformat()}.md"
-            if path.is_file():
-                try:
-                    entries.append(self._parse_daily_file(path, current))
-                except ValueError as exc:
-                    logger.warning("Skipping invalid daily journal file %s: %s", path, exc)
-            current -= timedelta(days=1)
-
-        entries.sort(key=lambda entry: entry.entry_date)
-        return DailyCollection(entries=entries, target_days=target_days)
+        observe_journal_operation(
+            "collect_daily",
+            "success",
+            measure_duration_seconds(started_at),
+        )
+        return collection
 
     def collect_review(self, period: ReviewPeriodSpec) -> ReviewCollection:
-        daily_entries: list[ReviewDailyEntry] = []
-        for current in self._iter_review_dates(period.start_date, period.end_date):
-            path = self._daily_dir() / f"{current.isoformat()}.md"
-            if not path.is_file():
-                continue
-            try:
-                daily_entries.append(self._parse_daily_review_file(path, current))
-            except ValueError as exc:
-                logger.warning("Skipping invalid daily journal file %s: %s", path, exc)
-
-        weekly_entries: list[ReviewWeeklyEntry] = []
-        weekly_dir = self._weekly_dir()
-        if weekly_dir.exists():
-            for path in weekly_dir.glob("*.md"):
-                try:
-                    entry = self._parse_weekly_review_file(path)
-                except ValueError as exc:
-                    logger.warning("Skipping invalid weekly journal file %s: %s", path, exc)
+        started_at = perf_clock.perf_counter()
+        try:
+            daily_entries: list[ReviewDailyEntry] = []
+            for current in self._iter_review_dates(period.start_date, period.end_date):
+                path = self._daily_dir() / f"{current.isoformat()}.md"
+                if not path.is_file():
                     continue
-                if period.start_date <= entry.saved_date <= period.end_date:
-                    weekly_entries.append(entry)
+                try:
+                    daily_entries.append(self._parse_daily_review_file(path, current))
+                except ValueError as exc:
+                    self._record_invalid_file("daily", path, str(exc))
 
-        daily_entries.sort(key=lambda entry: entry.entry_date)
-        weekly_entries.sort(key=lambda entry: entry.saved_date)
+            weekly_entries: list[ReviewWeeklyEntry] = []
+            weekly_dir = self._weekly_dir()
+            if weekly_dir.exists():
+                for path in weekly_dir.glob("*.md"):
+                    try:
+                        entry = self._parse_weekly_review_file(path)
+                    except ValueError as exc:
+                        self._record_invalid_file("weekly", path, str(exc))
+                        continue
+                    if period.start_date <= entry.saved_date <= period.end_date:
+                        weekly_entries.append(entry)
 
-        if daily_entries:
-            energy = sum(entry.energy for entry in daily_entries) / len(daily_entries)
-            focus = sum(entry.focus for entry in daily_entries) / len(daily_entries)
-            satisfaction = (
-                sum(entry.satisfaction for entry in daily_entries) / len(daily_entries)
-            )
-            averages = DailyAveragesSummary(
-                energy=energy,
-                focus=focus,
-                satisfaction=satisfaction,
-            )
-        else:
-            averages = DailyAveragesSummary(
-                energy=None,
-                focus=None,
-                satisfaction=None,
+            daily_entries.sort(key=lambda entry: entry.entry_date)
+            weekly_entries.sort(key=lambda entry: entry.saved_date)
+
+            if daily_entries:
+                energy = sum(entry.energy for entry in daily_entries) / len(daily_entries)
+                focus = sum(entry.focus for entry in daily_entries) / len(daily_entries)
+                satisfaction = (
+                    sum(entry.satisfaction for entry in daily_entries) / len(daily_entries)
+                )
+                averages = DailyAveragesSummary(
+                    energy=energy,
+                    focus=focus,
+                    satisfaction=satisfaction,
+                )
+            else:
+                averages = DailyAveragesSummary(
+                    energy=None,
+                    focus=None,
+                    satisfaction=None,
+                )
+
+            coverage = ReviewCoverage(
+                expected_daily_days=period.expected_daily_days,
+                found_daily_count=len(daily_entries),
+                found_weekly_count=len(weekly_entries),
+                missing_day_estimate=period.expected_daily_days - len(daily_entries),
             )
 
-        coverage = ReviewCoverage(
-            expected_daily_days=period.expected_daily_days,
-            found_daily_count=len(daily_entries),
-            found_weekly_count=len(weekly_entries),
-            missing_day_estimate=period.expected_daily_days - len(daily_entries),
+            collection = ReviewCollection(
+                period=period,
+                daily_entries=daily_entries,
+                weekly_entries=weekly_entries,
+                coverage=coverage,
+                daily_averages=averages,
+            )
+        except Exception:
+            observe_journal_operation(
+                "collect_review",
+                "error",
+                measure_duration_seconds(started_at),
+            )
+            raise
+
+        duration_seconds = measure_duration_seconds(started_at)
+        observe_journal_operation("collect_review", "success", duration_seconds)
+        log_event(
+            logger,
+            logging.INFO,
+            "review_collection_complete",
+            period=period.label,
+            daily_found=collection.coverage.found_daily_count,
+            weekly_found=collection.coverage.found_weekly_count,
+            missing_day_estimate=collection.coverage.missing_day_estimate,
+            duration_ms=round(duration_seconds * 1000, 3),
         )
-
-        return ReviewCollection(
-            period=period,
-            daily_entries=daily_entries,
-            weekly_entries=weekly_entries,
-            coverage=coverage,
-            daily_averages=averages,
-        )
+        return collection

@@ -3,9 +3,17 @@ from __future__ import annotations
 import logging
 import math
 import os
+import time as perf_clock
 from dataclasses import dataclass
 
 import httpx
+
+from observability import (
+    log_event,
+    measure_duration_seconds,
+    observe_llm_request,
+    observe_review_input_estimated_tokens,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,11 +124,16 @@ def ensure_input_token_budget(
     user_content: str,
 ) -> int:
     estimated_tokens = estimate_input_tokens(system_prompt, user_content)
-    logger.info(
-        "Estimated review input tokens: %s (cap=%s)",
-        estimated_tokens,
-        config.max_input_tokens,
+    log_event(
+        logger,
+        logging.INFO,
+        "llm_request_started",
+        provider=config.provider,
+        model=config.model,
+        timeout_seconds=config.timeout_seconds,
+        estimated_input_tokens=estimated_tokens,
     )
+    observe_review_input_estimated_tokens(config.provider, config.model, estimated_tokens)
     if estimated_tokens > config.max_input_tokens:
         raise LLMRequestTooLargeError(
             f"Review request exceeds the input token cap ({estimated_tokens} > {config.max_input_tokens})."
@@ -159,6 +172,7 @@ async def generate_review_text(
     system_prompt: str,
     user_content: str,
 ) -> LLMResult:
+    started_at = perf_clock.perf_counter()
     headers = {"Content-Type": "application/json"}
     if config.api_key is not None:
         headers["Authorization"] = f"Bearer {config.api_key}"
@@ -178,20 +192,96 @@ async def generate_review_text(
             response = await client.post(url, headers=headers, json=payload)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
+            duration_seconds = measure_duration_seconds(started_at)
+            observe_llm_request(
+                config.provider,
+                config.model,
+                "http_status",
+                duration_seconds,
+            )
+            log_event(
+                logger,
+                logging.ERROR,
+                "llm_request_failed",
+                provider=config.provider,
+                model=config.model,
+                failure_type="http_status",
+                status_code=exc.response.status_code,
+            )
             body = exc.response.text.strip()
             raise LLMRequestError(
                 f"LLM provider returned HTTP {exc.response.status_code}: {body or 'no response body'}"
             ) from exc
         except httpx.HTTPError as exc:
+            duration_seconds = measure_duration_seconds(started_at)
+            observe_llm_request(
+                config.provider,
+                config.model,
+                "transport",
+                duration_seconds,
+            )
+            log_event(
+                logger,
+                logging.ERROR,
+                "llm_request_failed",
+                provider=config.provider,
+                model=config.model,
+                failure_type="transport",
+            )
             raise LLMRequestError(f"Failed to reach LLM provider: {exc}") from exc
 
     try:
         data = response.json()
     except ValueError as exc:
+        duration_seconds = measure_duration_seconds(started_at)
+        observe_llm_request(
+            config.provider,
+            config.model,
+            "invalid_json",
+            duration_seconds,
+        )
+        log_event(
+            logger,
+            logging.ERROR,
+            "llm_request_failed",
+            provider=config.provider,
+            model=config.model,
+            failure_type="invalid_json",
+        )
         raise LLMRequestError("LLM provider returned invalid JSON.") from exc
 
+    try:
+        content = _extract_message_content(data)
+    except LLMRequestError:
+        duration_seconds = measure_duration_seconds(started_at)
+        observe_llm_request(
+            config.provider,
+            config.model,
+            "invalid_response",
+            duration_seconds,
+        )
+        log_event(
+            logger,
+            logging.ERROR,
+            "llm_request_failed",
+            provider=config.provider,
+            model=config.model,
+            failure_type="invalid_response",
+        )
+        raise
+
+    duration_seconds = measure_duration_seconds(started_at)
+    observe_llm_request(config.provider, config.model, "success", duration_seconds)
+    log_event(
+        logger,
+        logging.INFO,
+        "llm_request_complete",
+        provider=config.provider,
+        model=config.model,
+        duration_ms=round(duration_seconds * 1000, 3),
+    )
     return LLMResult(
         provider=config.provider,
         model=config.model,
-        content=_extract_message_content(data),
+        content=content,
     )

@@ -37,6 +37,14 @@ class JournalStore:
     def _weekly_filename(self, when: datetime) -> str:
         return f"{self._weekly_label(when.date())}.md"
 
+    def daily_path_for_when(self, when: datetime) -> Path:
+        normalized = self._now(when)
+        return self.root / DAILY_DIR / self._daily_filename(normalized)
+
+    def weekly_path_for_when(self, when: datetime) -> Path:
+        normalized = self._now(when)
+        return self.root / WEEKLY_DIR / self._weekly_filename(normalized)
+
     def _format_frontmatter(self, lines: list[str]) -> str:
         return "---\n" + "\n".join(lines) + "\n---\n"
 
@@ -77,7 +85,7 @@ class JournalStore:
         when: datetime | None = None,
     ) -> Path:
         when = self._now(when)
-        path = self.root / DAILY_DIR / self._daily_filename(when)
+        path = self.daily_path_for_when(when)
         content = self._daily_frontmatter(when, parsed) + raw
         self._write_atomic(path, content)
         return path
@@ -90,7 +98,7 @@ class JournalStore:
         when: datetime | None = None,
     ) -> Path:
         when = self._now(when)
-        path = self.root / WEEKLY_DIR / self._weekly_filename(when)
+        path = self.weekly_path_for_when(when)
         content = self._weekly_frontmatter(when) + raw
         self._write_atomic(path, content)
         return path
