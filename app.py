@@ -53,6 +53,17 @@ logger = logging.getLogger(__name__)
 
 AWAITING_DAILY = "awaiting_daily_checkin"
 AWAITING_WEEKLY = "awaiting_weekly_review"
+BOT_COMMANDS = [
+    ("start", "Open the bot and see the quick start"),
+    ("help", "Show commands and examples"),
+    ("daily", "Treat your next message as a daily check-in"),
+    ("weekly", "Treat your next message as a weekly review"),
+    ("template", "Show daily or weekly markdown templates"),
+    ("statistics", "Show score averages for a period"),
+    ("review", "Generate an LLM-backed journal review"),
+    ("log", "Show journal counts and coverage gaps"),
+    ("dump", "Export journal markdown as a ZIP"),
+]
 
 journal_store = JournalStore()
 journal_reader = JournalReader(journal_store)
@@ -137,6 +148,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     started_at = perf_clock.perf_counter()
     await _reply_with_template(update, TemplateId.TEXT, {"text_key": "start"})
     _command_log_context(update, command="start", outcome="success", started_at=started_at)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    started_at = perf_clock.perf_counter()
+    await _reply_with_template(update, TemplateId.TEXT, {"text_key": "help"})
+    _command_log_context(update, command="help", outcome="success", started_at=started_at)
+
+
+async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    started_at = perf_clock.perf_counter()
+    args = context.args or []
+    token = args[0].strip().lower() if args else None
+    if len(args) != 1 or token not in {"daily", "weekly"}:
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "template_usage"})
+        outcome = "success" if not args else "invalid_args"
+        _command_log_context(
+            update,
+            command="template",
+            outcome=outcome,
+            started_at=started_at,
+            arg_token=token,
+        )
+        return
+
+    text_key = "template_daily" if token == "daily" else "template_weekly"
+    await _reply_with_template(update, TemplateId.TEXT, {"text_key": text_key})
+    _command_log_context(
+        update,
+        command="template",
+        outcome="success",
+        started_at=started_at,
+        arg_token=token,
+    )
 
 
 def _format_size(size: int) -> str:
@@ -791,7 +835,29 @@ async def scheduled_checkup_prompt(context: ContextTypes.DEFAULT_TYPE) -> None:
     observe_reminder_job(kind, "sent")
 
 
+async def register_bot_commands(application: Application) -> None:
+    try:
+        await application.bot.set_my_commands(BOT_COMMANDS)
+    except Exception as exc:
+        log_event(
+            logger,
+            logging.WARNING,
+            "bot_command_registration_failed",
+            error=str(exc),
+        )
+        return
+
+    log_event(
+        logger,
+        logging.INFO,
+        "bot_commands_registered",
+        command_count=len(BOT_COMMANDS),
+    )
+
+
 async def post_init(application: Application) -> None:
+    await register_bot_commands(application)
+
     raw = os.environ.get("CHECKUP_CHAT_ID")
     if not raw:
         set_reminders_enabled(False)
@@ -868,8 +934,10 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("daily", daily_command))
     app.add_handler(CommandHandler("weekly", weekly_command))
+    app.add_handler(CommandHandler("template", template_command))
     app.add_handler(CommandHandler("statistics", statistics_command))
     app.add_handler(CommandHandler("log", log_command))
     app.add_handler(CommandHandler("dump", dump_command))

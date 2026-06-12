@@ -24,7 +24,45 @@ def test_render_uses_template_lookup_for_static_message():
 
     rendered = renderer.render(TemplateId.TEXT, {"text_key": "start"})
 
-    assert rendered.text == "Hi! Send me any message and I'll say hello back!"
+    assert "<b>Checkup bot</b>" in rendered.text
+    assert "/template daily" in rendered.text
+    assert "/help" in rendered.text
+    assert rendered.parse_mode == ParseMode.HTML
+
+
+def test_render_help_lists_core_commands():
+    renderer = TelegramMessageRenderer()
+
+    rendered = renderer.render(TemplateId.TEXT, {"text_key": "help"})
+
+    assert "/daily" in rendered.text
+    assert "/weekly" in rendered.text
+    assert "/template daily|weekly" in rendered.text
+    assert "/statistics [Nd|Nw|Nm]" in rendered.text
+    assert rendered.parse_mode == ParseMode.HTML
+
+
+def test_render_daily_template_preserves_copyable_markdown():
+    renderer = TelegramMessageRenderer()
+
+    rendered = renderer.render(TemplateId.TEXT, {"text_key": "template_daily"})
+
+    assert "<pre>## Daily Check-In" in rendered.text
+    assert "Energy: /10" in rendered.text
+    assert "### What should tomorrow focus on?" in rendered.text
+    assert rendered.text.endswith("</pre>")
+    assert rendered.parse_mode == ParseMode.HTML
+
+
+def test_render_weekly_template_preserves_copyable_markdown():
+    renderer = TelegramMessageRenderer()
+
+    rendered = renderer.render(TemplateId.TEXT, {"text_key": "template_weekly"})
+
+    assert "<pre>## Weekly Review" in rendered.text
+    assert "### Momentum" in rendered.text
+    assert "### Next Week Focus" in rendered.text
+    assert rendered.text.endswith("</pre>")
     assert rendered.parse_mode == ParseMode.HTML
 
 

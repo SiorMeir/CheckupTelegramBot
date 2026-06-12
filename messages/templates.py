@@ -26,7 +26,54 @@ TEMPLATES: dict[str, str] = {
 }
 
 TEXT_MESSAGES: dict[str, str] = {
-    "start": "Hi! Send me any message and I'll say hello back!",
+    "start": (
+        "<b>Checkup bot</b>\n\n"
+        "Send a markdown daily check-in or weekly review and I will parse it, save it, "
+        "and reply with a clean summary.\n\n"
+        "Start with /template daily, or use /help to see every command."
+    ),
+    "help": (
+        "<b>Commands</b>\n\n"
+        "/daily - Treat your next message as a daily check-in\n"
+        "/weekly - Treat your next message as a weekly review\n"
+        "/template daily|weekly - Show copyable markdown formats\n"
+        "/statistics [Nd|Nw|Nm] - Score averages, for example /statistics 2w\n"
+        "/review [Nw] - LLM-backed journal review, for example /review 4w\n"
+        "/log [verbose] - Journal counts and coverage gaps\n"
+        "/dump - Export journal markdown as a ZIP"
+    ),
+    "template_usage": "Use /template daily or /template weekly.",
+    "template_daily": (
+        "<b>Daily check-in template</b>\n\n"
+        "<pre>## Daily Check-In\n\n"
+        "Energy: /10\n"
+        "Focus: /10\n"
+        "Satisfaction: /10\n\n"
+        "### What did I actually do today?\n"
+        "- \n\n"
+        "### What felt meaningful?\n"
+        "- \n\n"
+        "### What drained me?\n"
+        "- \n\n"
+        "### What should tomorrow focus on?\n"
+        "- </pre>"
+    ),
+    "template_weekly": (
+        "<b>Weekly review template</b>\n\n"
+        "<pre>## Weekly Review\n\n"
+        "### Momentum\n"
+        "- \n\n"
+        "### Friction\n"
+        "- \n\n"
+        "### Avoidance\n"
+        "- \n\n"
+        "### Meaningful\n"
+        "- \n\n"
+        "### Fake productivity\n"
+        "- \n\n"
+        "### Next Week Focus\n"
+        "- </pre>"
+    ),
     "daily_mode_enabled": (
         "<b>Daily mode enabled</b> for your next message.\n"
         "Auto-detect also works without this command."
