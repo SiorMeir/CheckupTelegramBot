@@ -2,10 +2,10 @@
 #   sudo systemctl restart k3s
 #
 mirrors:
-  "192.168.68.59:30500":
+  "<ip:port>":
     endpoint:
-      - "http://192.168.68.59:30500"
+      - "http://<ip:port>"
 configs:
-  "192.168.68.59:30500":
+  "<ip:port>":
     tls:
       insecure_skip_verify: true

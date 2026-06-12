@@ -10,8 +10,8 @@
 #
 # 2. Registry (deployment/registry.yaml) + push from your PC:
 #      docker build -t checkup-bot:latest .
-#      docker tag checkup-bot:latest 192.168.68.59:30500/checkup-bot:latest
-#      docker push 192.168.68.59:30500/checkup-bot:latest
+#      docker tag checkup-bot:latest <ip:port>/checkup-bot:latest
+#      docker push <ip:port>/checkup-bot:latest
 #    On the k3s node, /etc/rancher/k3s/registries.yaml must allow HTTP on :30500
 #    (see deployment/k3s-registries.yaml.example), then: sudo systemctl restart k3s
 #
