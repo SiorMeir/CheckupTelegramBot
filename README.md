@@ -1,4 +1,5 @@
 # CheckupTelegramBot
+<img width="480" height="418" alt="output" src="https://github.com/user-attachments/assets/d3d14cdd-7b99-4aba-9d4e-3cb8a0ee97a9" />
 
 📝 A small Telegram bot for personal daily check-ins and weekly reviews.
 
