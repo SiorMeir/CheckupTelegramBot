@@ -167,6 +167,23 @@ def _extract_message_content(data: dict) -> str:
     raise LLMRequestError("LLM response format was not recognized.")
 
 
+def _build_chat_completion_payload(
+    config: LLMConfig,
+    system_prompt: str,
+    user_content: str,
+) -> dict:
+    payload = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_content},
+        ],
+    }
+    if config.provider == "LOCAL":
+        payload["temperature"] = 0.3
+    return payload
+
+
 async def generate_review_text(
     config: LLMConfig,
     system_prompt: str,
@@ -177,14 +194,7 @@ async def generate_review_text(
     if config.api_key is not None:
         headers["Authorization"] = f"Bearer {config.api_key}"
 
-    payload = {
-        "model": config.model,
-        "temperature": 0.3,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_content},
-        ],
-    }
+    payload = _build_chat_completion_payload(config, system_prompt, user_content)
     url = f"{config.base_url}/chat/completions"
 
     async with httpx.AsyncClient(timeout=config.timeout_seconds) as client:

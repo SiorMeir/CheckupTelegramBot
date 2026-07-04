@@ -4,6 +4,7 @@ from review.llm import (
     LLMConfig,
     LLMConfigError,
     LLMRequestTooLargeError,
+    _build_chat_completion_payload,
     ensure_input_token_budget,
     load_llm_config_from_env,
 )
@@ -51,3 +52,34 @@ def test_input_budget_rejects_oversized_prompt():
 
     with pytest.raises(LLMRequestTooLargeError):
         ensure_input_token_budget(config, "abcd" * 4, "efgh" * 4)
+
+
+def test_openai_payload_omits_temperature():
+    config = LLMConfig(
+        provider="OPENAI",
+        model="gpt-test",
+        base_url="https://api.openai.com/v1",
+        api_key="secret",
+        timeout_seconds=60,
+        max_input_tokens=8000,
+    )
+
+    payload = _build_chat_completion_payload(config, "system", "user")
+
+    assert payload["model"] == "gpt-test"
+    assert "temperature" not in payload
+
+
+def test_local_payload_keeps_temperature():
+    config = LLMConfig(
+        provider="LOCAL",
+        model="local-model",
+        base_url="http://localhost:1234/v1",
+        api_key=None,
+        timeout_seconds=60,
+        max_input_tokens=8000,
+    )
+
+    payload = _build_chat_completion_payload(config, "system", "user")
+
+    assert payload["temperature"] == 0.3
