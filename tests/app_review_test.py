@@ -15,7 +15,13 @@ from journal.read import (
     ReviewWeeklyEntry,
 )
 from messages import TemplateId
-from review.llm import LLMConfig, LLMConfigError, LLMRequestTooLargeError, LLMResult
+from review.llm import (
+    LLMConfig,
+    LLMConfigError,
+    LLMRequestError,
+    LLMRequestTooLargeError,
+    LLMResult,
+)
 
 
 def _run(coro):
@@ -92,6 +98,7 @@ def test_review_command_rejects_invalid_args():
         == app.message_renderer.render(TemplateId.TEXT, {"text_key": "review_usage"}).text
     )
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+    assert update.message.reply_text.await_count == 1
 
 
 def test_review_command_reports_no_data(monkeypatch):
@@ -111,6 +118,7 @@ def test_review_command_reports_no_data(monkeypatch):
 
     assert update.message.reply_text.await_args.args[0] == "No journal entries for 2w."
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+    assert update.message.reply_text.await_count == 1
 
 
 def test_review_command_reports_token_cap_failure(monkeypatch):
@@ -149,6 +157,7 @@ def test_review_command_reports_token_cap_failure(monkeypatch):
     reply = update.message.reply_text.await_args.args[0]
     assert "too large for the configured model input budget" in reply
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+    assert update.message.reply_text.await_count == 1
 
 
 def test_review_command_formats_successful_reply(monkeypatch):
@@ -186,14 +195,20 @@ def test_review_command_formats_successful_reply(monkeypatch):
 
     _run(app.review_command(update, context))
 
-    reply = update.message.reply_text.await_args.args[0]
+    replies = update.message.reply_text.await_args_list
+    assert len(replies) == 2
+    ack = replies[0].args[0]
+    reply = replies[1].args[0]
+    assert "Review request sent to OPENAI/gpt-test." in ack
+    assert "I will reply here when it is ready." in ack
     assert "<b>Review | 2w</b>" in reply
     assert "Coverage: 12/14 daily, 1 weekly" in reply
     assert "Model: OPENAI/gpt-test" in reply
     assert "<b>Positive trends</b>" in reply
     assert "- Strong week." in reply
     assert "- <b>Visible</b> progress." in reply
-    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+    assert replies[0].kwargs["parse_mode"] == ParseMode.HTML
+    assert replies[1].kwargs["parse_mode"] == ParseMode.HTML
 
 
 def test_review_command_includes_saved_context_in_llm_payload(monkeypatch):
@@ -257,3 +272,43 @@ def test_review_command_reports_configuration_error(monkeypatch):
 
     assert update.message.reply_text.await_args.args[0] == "Review is not configured: missing key"
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+    assert update.message.reply_text.await_count == 1
+
+
+def test_review_command_acks_before_provider_failure(monkeypatch):
+    update = _make_update()
+    context = _make_context(["2w"])
+    monkeypatch.setattr(
+        app,
+        "journal_reader",
+        MagicMock(collect_review=MagicMock(return_value=_sample_collection())),
+    )
+    monkeypatch.setattr(
+        app,
+        "load_llm_config_from_env",
+        MagicMock(
+            return_value=LLMConfig(
+                provider="OPENAI",
+                model="gpt-test",
+                base_url="https://api.openai.com/v1",
+                api_key="secret",
+                timeout_seconds=60,
+                max_input_tokens=8000,
+            )
+        ),
+    )
+    monkeypatch.setattr(app, "ensure_input_token_budget", MagicMock(return_value=123))
+
+    async def _raise_provider(*args, **kwargs):
+        raise LLMRequestError("provider down")
+
+    monkeypatch.setattr(app, "generate_review_text", _raise_provider)
+
+    _run(app.review_command(update, context))
+
+    replies = update.message.reply_text.await_args_list
+    assert len(replies) == 2
+    assert "Review request sent to OPENAI/gpt-test." in replies[0].args[0]
+    assert replies[0].kwargs["parse_mode"] == ParseMode.HTML
+    assert replies[1].args[0] == "Review failed while calling the LLM provider: provider down"
+    assert replies[1].kwargs["parse_mode"] == ParseMode.HTML

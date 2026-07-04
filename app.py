@@ -580,6 +580,16 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
+    await _reply_with_template(
+        update,
+        TemplateId.TEXT,
+        {
+            "text_key": "review_request_sent",
+            "provider": config.provider,
+            "model": config.model,
+        },
+    )
+
     try:
         result = await generate_review_text(config, REVIEW_SYSTEM_PROMPT, user_payload)
     except LLMRequestError as exc:

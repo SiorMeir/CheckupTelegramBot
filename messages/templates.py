@@ -113,6 +113,10 @@ TEXT_MESSAGES: dict[str, str] = {
     "review_usage": "Usage: /review [Nw], for example /review 2w",
     "review_empty": "No journal entries for ${period_label}.",
     "review_not_configured": "Review is not configured: ${error}",
+    "review_request_sent": (
+        "Review request sent to ${provider}/${model}. "
+        "I will reply here when it is ready."
+    ),
     "review_too_large": (
         "That review period is too large for the configured model input budget. "
         "Retry with fewer weeks."

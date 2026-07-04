@@ -87,6 +87,23 @@ def test_render_context_messages(text_key, expected):
     assert rendered.parse_mode == ParseMode.HTML
 
 
+def test_render_review_request_sent_escapes_provider_and_model():
+    renderer = TelegramMessageRenderer()
+
+    rendered = renderer.render(
+        TemplateId.TEXT,
+        {
+            "text_key": "review_request_sent",
+            "provider": "OPENAI",
+            "model": "gpt-<test>&latest",
+        },
+    )
+
+    assert "Review request sent to OPENAI/gpt-&lt;test&gt;&amp;latest." in rendered.text
+    assert "I will reply here when it is ready." in rendered.text
+    assert rendered.parse_mode == ParseMode.HTML
+
+
 def test_render_daily_success_escapes_html_and_renders_empty_lists():
     renderer = TelegramMessageRenderer()
     parsed = DailyCheckIn(
