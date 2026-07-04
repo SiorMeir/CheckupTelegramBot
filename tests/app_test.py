@@ -162,6 +162,72 @@ def test_template_command_invalid_args_replies_with_usage():
     assert context.user_data == {}
 
 
+def test_context_command_arms_next_message_and_clears_other_modes():
+    update = _make_update()
+    context = _make_context()
+    context.user_data[app.AWAITING_DAILY] = True
+    context.user_data[app.AWAITING_WEEKLY] = True
+
+    _run(app.context_command(update, context))
+
+    assert app.AWAITING_DAILY not in context.user_data
+    assert app.AWAITING_WEEKLY not in context.user_data
+    assert context.user_data[app.AWAITING_CONTEXT] is True
+    reply = update.message.reply_text.await_args.args[0]
+    assert "Review context mode enabled" in reply
+    assert "current goals" in reply
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+
+
+def test_context_command_clear_removes_context_and_acknowledges():
+    update = _make_update()
+    context = _make_context(args=["clear"])
+    context.user_data[app.REVIEW_CONTEXT] = "old context"
+    context.user_data[app.AWAITING_CONTEXT] = True
+
+    _run(app.context_command(update, context))
+
+    assert app.REVIEW_CONTEXT not in context.user_data
+    assert app.AWAITING_CONTEXT not in context.user_data
+    reply = update.message.reply_text.await_args.args[0]
+    assert "Review context cleared" in reply
+    assert "journal data only" in reply
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+
+
+def test_context_command_rejects_invalid_args_without_arming():
+    update = _make_update()
+    context = _make_context(args=["badarg"])
+
+    _run(app.context_command(update, context))
+
+    update.message.reply_text.assert_awaited_once_with(
+        app.message_renderer.render(TemplateId.TEXT, {"text_key": "context_usage"}).text,
+        parse_mode=ParseMode.HTML,
+    )
+    assert context.user_data == {}
+
+
+def test_daily_and_weekly_commands_clear_pending_context_mode():
+    daily_update = _make_update()
+    daily_context = _make_context()
+    daily_context.user_data[app.AWAITING_CONTEXT] = True
+
+    _run(app.daily_command(daily_update, daily_context))
+
+    assert app.AWAITING_CONTEXT not in daily_context.user_data
+    assert daily_context.user_data[app.AWAITING_DAILY] is True
+
+    weekly_update = _make_update()
+    weekly_context = _make_context()
+    weekly_context.user_data[app.AWAITING_CONTEXT] = True
+
+    _run(app.weekly_command(weekly_update, weekly_context))
+
+    assert app.AWAITING_CONTEXT not in weekly_context.user_data
+    assert weekly_context.user_data[app.AWAITING_WEEKLY] is True
+
+
 def test_scheduled_prompt_daily():
     async def _body():
         context = MagicMock()

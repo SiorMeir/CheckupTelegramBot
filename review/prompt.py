@@ -20,6 +20,7 @@ Evidence rules:
 - Do not overstate confidence.
 - If the dataset is sparse or inconsistent, say so directly.
 - If data is not rich enough to draw conclusions, say so directly and ask the user to articulate more details moving forward.
+- If the payload includes custom_context, treat it as user-supplied background for interpreting the review, not as journal evidence from the reviewed period.
 
 Interpretation rules:
 - Treat daily check-ins as granular signals.

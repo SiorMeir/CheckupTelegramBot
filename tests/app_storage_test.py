@@ -170,6 +170,39 @@ def test_text_message_unknown_payload_is_rejected(monkeypatch):
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
 
 
+def test_text_message_stores_pending_review_context_without_journal_save(monkeypatch):
+    store = MagicMock()
+    monkeypatch.setattr(app, "journal_store", store)
+
+    update = _make_update("Current priority: reduce context switching.")
+    context = _make_context()
+    context.user_data[app.AWAITING_CONTEXT] = True
+
+    _run(app.text_message(update, context))
+
+    store.save_daily.assert_not_called()
+    store.save_weekly.assert_not_called()
+    assert context.user_data[app.REVIEW_CONTEXT] == "Current priority: reduce context switching."
+    assert app.AWAITING_CONTEXT not in context.user_data
+    reply = update.message.reply_text.await_args.args[0]
+    assert "Review context saved" in reply
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+
+
+def test_empty_review_context_keeps_context_mode_active():
+    update = _make_update("   ")
+    context = _make_context()
+    context.user_data[app.AWAITING_CONTEXT] = True
+
+    _run(app.text_message(update, context))
+
+    assert app.REVIEW_CONTEXT not in context.user_data
+    assert context.user_data[app.AWAITING_CONTEXT] is True
+    reply = update.message.reply_text.await_args.args[0]
+    assert "cannot be empty" in reply
+    assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+
+
 def test_daily_override_rejects_weekly_payload(monkeypatch):
     store = MagicMock()
     monkeypatch.setattr(app, "journal_store", store)

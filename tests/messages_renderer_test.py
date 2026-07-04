@@ -39,6 +39,8 @@ def test_render_help_lists_core_commands():
     assert "/weekly" in rendered.text
     assert "/template daily|weekly" in rendered.text
     assert "/statistics [Nd|Nw|Nm]" in rendered.text
+    assert "/context" in rendered.text
+    assert "/context clear" in rendered.text
     assert rendered.parse_mode == ParseMode.HTML
 
 
@@ -63,6 +65,25 @@ def test_render_weekly_template_preserves_copyable_markdown():
     assert "### Momentum" in rendered.text
     assert "### Next Week Focus" in rendered.text
     assert rendered.text.endswith("</pre>")
+    assert rendered.parse_mode == ParseMode.HTML
+
+
+@pytest.mark.parametrize(
+    ("text_key", "expected"),
+    [
+        ("context_usage", "Usage: /context or /context clear"),
+        ("context_mode_enabled", "Review context mode enabled"),
+        ("context_saved", "Review context saved"),
+        ("context_empty", "Review context cannot be empty"),
+        ("context_cleared", "Review context cleared"),
+    ],
+)
+def test_render_context_messages(text_key, expected):
+    renderer = TelegramMessageRenderer()
+
+    rendered = renderer.render(TemplateId.TEXT, {"text_key": text_key})
+
+    assert expected in rendered.text
     assert rendered.parse_mode == ParseMode.HTML
 
 

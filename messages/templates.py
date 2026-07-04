@@ -38,6 +38,8 @@ TEXT_MESSAGES: dict[str, str] = {
         "/weekly - Treat your next message as a weekly review\n"
         "/template daily|weekly - Show copyable markdown formats\n"
         "/statistics [Nd|Nw|Nm] - Score averages, for example /statistics 2w\n"
+        "/context - Add background for LLM reviews\n"
+        "/context clear - Clear saved review context\n"
         "/review [Nw] - LLM-backed journal review, for example /review 4w\n"
         "/log [verbose] - Journal counts and coverage gaps\n"
         "/dump - Export journal markdown as a ZIP"
@@ -86,6 +88,26 @@ TEXT_MESSAGES: dict[str, str] = {
         "Usage: /statistics [Nd|Nw|Nm], for example /statistics 5d, /statistics 2w, /statistics 10m"
     ),
     "statistics_empty": "No daily entries for ${period_label}.",
+    "context_usage": "Usage: /context or /context clear",
+    "context_mode_enabled": (
+        "<b>Review context mode enabled</b> for your next message.\n\n"
+        "Send any helpful background you want the LLM to consider during /review: "
+        "current goals, constraints, priorities, stressors, work or life context, "
+        "or specific patterns you want it to watch for."
+    ),
+    "context_saved": (
+        "<b>Review context saved.</b>\n\n"
+        "Future /review calls in this bot session will include it. "
+        "Send /context again to replace it, or /context clear to remove it."
+    ),
+    "context_empty": (
+        "Review context cannot be empty.\n\n"
+        "Send the context as one message, or use /context clear to leave reviews based only on journal data."
+    ),
+    "context_cleared": (
+        "<b>Review context cleared.</b>\n\n"
+        "Future /review calls will use journal data only unless you add new context with /context."
+    ),
     "log_usage": "Usage: /log [verbose]",
     "log_empty": "No valid journal entries found.",
     "review_usage": "Usage: /review [Nw], for example /review 2w",

@@ -53,6 +53,8 @@ logger = logging.getLogger(__name__)
 
 AWAITING_DAILY = "awaiting_daily_checkin"
 AWAITING_WEEKLY = "awaiting_weekly_review"
+AWAITING_CONTEXT = "awaiting_review_context"
+REVIEW_CONTEXT = "review_context"
 BOT_COMMANDS = [
     ("start", "Open the bot and see the quick start"),
     ("help", "Show commands and examples"),
@@ -60,6 +62,7 @@ BOT_COMMANDS = [
     ("weekly", "Treat your next message as a weekly review"),
     ("template", "Show daily or weekly markdown templates"),
     ("statistics", "Show score averages for a period"),
+    ("context", "Add or clear context for LLM reviews"),
     ("review", "Generate an LLM-backed journal review"),
     ("log", "Show journal counts and coverage gaps"),
     ("dump", "Export journal markdown as a ZIP"),
@@ -196,7 +199,11 @@ def _cleanup_archive(path: Path, *, cleanup: bool) -> None:
         logger.warning("Could not remove temporary archive %s", path)
 
 
-def _serialize_review_collection(collection: ReviewCollection) -> str:
+def _serialize_review_collection(
+    collection: ReviewCollection,
+    *,
+    custom_context: str | None = None,
+) -> str:
     payload = {
         "period": {
             "token": collection.period.label,
@@ -242,12 +249,15 @@ def _serialize_review_collection(collection: ReviewCollection) -> str:
             for entry in collection.weekly_entries
         ],
     }
+    if custom_context:
+        payload["custom_context"] = custom_context
     return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     started_at = perf_clock.perf_counter()
     context.user_data.pop(AWAITING_WEEKLY, None)
+    context.user_data.pop(AWAITING_CONTEXT, None)
     context.user_data[AWAITING_DAILY] = True
     await _reply_with_template(update, TemplateId.TEXT, {"text_key": "daily_mode_enabled"})
     _command_log_context(update, command="daily", outcome="success", started_at=started_at)
@@ -256,9 +266,46 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 async def weekly_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     started_at = perf_clock.perf_counter()
     context.user_data.pop(AWAITING_DAILY, None)
+    context.user_data.pop(AWAITING_CONTEXT, None)
     context.user_data[AWAITING_WEEKLY] = True
     await _reply_with_template(update, TemplateId.TEXT, {"text_key": "weekly_mode_enabled"})
     _command_log_context(update, command="weekly", outcome="success", started_at=started_at)
+
+
+async def context_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    started_at = perf_clock.perf_counter()
+    args = context.args or []
+    token = args[0].strip().lower() if args else None
+
+    if len(args) > 1 or (token is not None and token != "clear"):
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "context_usage"})
+        _command_log_context(
+            update,
+            command="context",
+            outcome="invalid_args",
+            started_at=started_at,
+            arg_token=token,
+        )
+        return
+
+    if token == "clear":
+        context.user_data.pop(REVIEW_CONTEXT, None)
+        context.user_data.pop(AWAITING_CONTEXT, None)
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "context_cleared"})
+        _command_log_context(
+            update,
+            command="context",
+            outcome="cleared",
+            started_at=started_at,
+            arg_token=token,
+        )
+        return
+
+    context.user_data.pop(AWAITING_DAILY, None)
+    context.user_data.pop(AWAITING_WEEKLY, None)
+    context.user_data[AWAITING_CONTEXT] = True
+    await _reply_with_template(update, TemplateId.TEXT, {"text_key": "context_mode_enabled"})
+    _command_log_context(update, command="context", outcome="success", started_at=started_at)
 
 
 async def statistics_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -514,7 +561,11 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    user_payload = _serialize_review_collection(collection)
+    custom_context = context.user_data.get(REVIEW_CONTEXT)
+    user_payload = _serialize_review_collection(
+        collection,
+        custom_context=custom_context if isinstance(custom_context, str) else None,
+    )
     try:
         ensure_input_token_budget(config, REVIEW_SYSTEM_PROMPT, user_payload)
     except LLMRequestTooLargeError:
@@ -740,6 +791,21 @@ async def handle_weekly_review_text(
     )
 
 
+async def handle_review_context_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    raw = update.message.text
+    custom_context = raw.strip()
+    if not custom_context:
+        await _reply_with_template(update, TemplateId.TEXT, {"text_key": "context_empty"})
+        return
+
+    context.user_data[REVIEW_CONTEXT] = custom_context
+    context.user_data.pop(AWAITING_CONTEXT, None)
+    await _reply_with_template(update, TemplateId.TEXT, {"text_key": "context_saved"})
+
+
 async def handle_detected_checkin_text(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
@@ -771,7 +837,16 @@ async def handle_detected_checkin_text(
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     raw = update.message.text
     detected = CheckupParser.detect_type(raw)
-    if context.user_data.get(AWAITING_DAILY):
+    if context.user_data.get(AWAITING_CONTEXT):
+        _text_log_context(
+            update,
+            event="message_routed",
+            level=logging.INFO,
+            route="awaiting_context",
+            detected_type=detected,
+        )
+        await handle_review_context_text(update, context)
+    elif context.user_data.get(AWAITING_DAILY):
         _text_log_context(
             update,
             event="message_routed",
@@ -939,6 +1014,7 @@ def main():
     app.add_handler(CommandHandler("weekly", weekly_command))
     app.add_handler(CommandHandler("template", template_command))
     app.add_handler(CommandHandler("statistics", statistics_command))
+    app.add_handler(CommandHandler("context", context_command))
     app.add_handler(CommandHandler("log", log_command))
     app.add_handler(CommandHandler("dump", dump_command))
     app.add_handler(CommandHandler("review", review_command))

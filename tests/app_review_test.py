@@ -1,4 +1,5 @@
 import asyncio
+import json
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
@@ -30,6 +31,7 @@ def _make_update() -> MagicMock:
 def _make_context(args: list[str]) -> MagicMock:
     context = MagicMock()
     context.args = args
+    context.user_data = {}
     return context
 
 
@@ -114,6 +116,7 @@ def test_review_command_reports_no_data(monkeypatch):
 def test_review_command_reports_token_cap_failure(monkeypatch):
     update = _make_update()
     context = _make_context(["2w"])
+    context.user_data[app.REVIEW_CONTEXT] = "Watch context switching."
     monkeypatch.setattr(
         app,
         "journal_reader",
@@ -141,6 +144,8 @@ def test_review_command_reports_token_cap_failure(monkeypatch):
 
     _run(app.review_command(update, context))
 
+    payload = json.loads(app.ensure_input_token_budget.call_args.args[2])
+    assert payload["custom_context"] == "Watch context switching."
     reply = update.message.reply_text.await_args.args[0]
     assert "too large for the configured model input budget" in reply
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
@@ -189,6 +194,49 @@ def test_review_command_formats_successful_reply(monkeypatch):
     assert "- Strong week." in reply
     assert "- <b>Visible</b> progress." in reply
     assert update.message.reply_text.await_args.kwargs["parse_mode"] == ParseMode.HTML
+
+
+def test_review_command_includes_saved_context_in_llm_payload(monkeypatch):
+    update = _make_update()
+    context = _make_context(["2w"])
+    context.user_data[app.REVIEW_CONTEXT] = "I am prioritizing deep work this month."
+    monkeypatch.setattr(
+        app,
+        "journal_reader",
+        MagicMock(collect_review=MagicMock(return_value=_sample_collection())),
+    )
+    monkeypatch.setattr(
+        app,
+        "load_llm_config_from_env",
+        MagicMock(
+            return_value=LLMConfig(
+                provider="OPENAI",
+                model="gpt-test",
+                base_url="https://api.openai.com/v1",
+                api_key="secret",
+                timeout_seconds=60,
+                max_input_tokens=8000,
+            )
+        ),
+    )
+    monkeypatch.setattr(app, "ensure_input_token_budget", MagicMock(return_value=123))
+    captured_payload = {}
+
+    async def _fake_generate(config, system_prompt, user_payload):
+        captured_payload.update(json.loads(user_payload))
+        return LLMResult(provider="OPENAI", model="gpt-test", content="Analysis")
+
+    monkeypatch.setattr(app, "generate_review_text", _fake_generate)
+
+    _run(app.review_command(update, context))
+
+    assert captured_payload["custom_context"] == "I am prioritizing deep work this month."
+
+
+def test_serialize_review_collection_omits_empty_custom_context():
+    payload = json.loads(app._serialize_review_collection(_sample_collection()))
+
+    assert "custom_context" not in payload
 
 
 def test_review_command_reports_configuration_error(monkeypatch):
