@@ -3,6 +3,7 @@ import logging
 import os
 import time as perf_clock
 from datetime import datetime, time
+from html import escape
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -36,6 +37,7 @@ from review.llm import (
 )
 from review.prompt import REVIEW_SYSTEM_PROMPT
 from telegram import Bot, Update
+from telegram.constants import MessageLimit
 from telegram.ext import (
     Application,
     ApplicationBuilder,
@@ -71,6 +73,12 @@ BOT_COMMANDS = [
 journal_store = JournalStore()
 journal_reader = JournalReader(journal_store)
 message_renderer = TelegramMessageRenderer()
+
+
+class ReviewReportDeliveryError(RuntimeError):
+    def __init__(self, rendered_length: int, original: Exception) -> None:
+        super().__init__(str(original))
+        self.rendered_length = rendered_length
 
 
 def _safe_numeric_id(value: object) -> int | None:
@@ -197,6 +205,116 @@ def _cleanup_archive(path: Path, *, cleanup: bool) -> None:
         path.unlink(missing_ok=True)
     except OSError:
         logger.warning("Could not remove temporary archive %s", path)
+
+
+def _page_header(period_label: str, page_number: int, page_count: int) -> str:
+    return (
+        f"<b>Review | {escape(period_label)} | "
+        f"{page_number}/{page_count}</b>\n\n"
+    )
+
+
+def _append_chunk(
+    chunks: list[str],
+    current: str,
+    addition: str,
+    separator: str,
+    *,
+    max_length: int,
+) -> str:
+    candidate = f"{current}{separator}{addition}" if current else addition
+    if len(candidate) <= max_length:
+        return candidate
+    if current:
+        chunks.append(current)
+        return addition
+    chunks.append(current)
+    return ""
+
+
+def _split_long_line(line: str, max_length: int) -> list[str]:
+    return [line[index : index + max_length] for index in range(0, len(line), max_length)]
+
+
+def _split_block(block: str, max_length: int) -> list[str]:
+    if len(block) <= max_length:
+        return [block]
+
+    chunks: list[str] = []
+    current = ""
+    for line in block.splitlines() or [block]:
+        line_parts = _split_long_line(line, max_length) if len(line) > max_length else [line]
+        for part in line_parts:
+            current = _append_chunk(chunks, current, part, "\n", max_length=max_length)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _split_message_body(text: str, max_length: int) -> list[str]:
+    chunks: list[str] = []
+    current = ""
+    for block in text.split("\n\n"):
+        for part in _split_block(block, max_length):
+            current = _append_chunk(chunks, current, part, "\n\n", max_length=max_length)
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _paginate_review_message(
+    text: str,
+    *,
+    period_label: str,
+    max_length: int = int(MessageLimit.MAX_TEXT_LENGTH),
+) -> list[str]:
+    if len(text) <= max_length:
+        return [text]
+
+    reserved_header_length = len(_page_header(period_label, 999, 999))
+    body_limit = max_length - reserved_header_length
+    if body_limit <= 0:
+        raise ValueError("Page header leaves no room for review body")
+
+    bodies = _split_message_body(text, body_limit)
+    page_count = len(bodies)
+    return [
+        f"{_page_header(period_label, index, page_count)}{body}"
+        for index, body in enumerate(bodies, start=1)
+    ]
+
+
+async def _send_review_report(
+    update: Update,
+    *,
+    collection: ReviewCollection,
+    provider: str,
+    model: str,
+    analysis: str,
+) -> int:
+    rendered = message_renderer.render(
+        TemplateId.REVIEW_REPORT,
+        {
+            "collection": collection,
+            "provider": provider,
+            "model": model,
+            "analysis": analysis,
+        },
+    )
+    rendered_length = len(rendered.text)
+    try:
+        pages = _paginate_review_message(
+            rendered.text,
+            period_label=collection.period.label,
+        )
+        for page in pages:
+            await update.message.reply_text(
+                page,
+                parse_mode=rendered.parse_mode,
+            )
+    except Exception as exc:
+        raise ReviewReportDeliveryError(rendered_length, exc) from exc
+    return rendered_length
 
 
 def _serialize_review_collection(
@@ -609,16 +727,49 @@ async def review_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         )
         return
 
-    await _reply_with_template(
-        update,
-        TemplateId.REVIEW_REPORT,
-        {
-            "collection": collection,
-            "provider": result.provider,
-            "model": result.model,
-            "analysis": result.content,
-        },
-    )
+    try:
+        await _send_review_report(
+            update,
+            collection=collection,
+            provider=result.provider,
+            model=result.model,
+            analysis=result.content,
+        )
+    except ReviewReportDeliveryError as exc:
+        log_event(
+            logger,
+            logging.ERROR,
+            "review_send_failed",
+            provider=result.provider,
+            model=result.model,
+            period=collection.period.label,
+            rendered_length=exc.rendered_length,
+            error=str(exc),
+        )
+        logger.exception("Review command generated a result but failed to send it")
+        try:
+            await _reply_with_template(
+                update,
+                TemplateId.TEXT,
+                {"text_key": "review_send_failure", "error": exc},
+            )
+        except Exception as fallback_exc:
+            log_event(
+                logger,
+                logging.ERROR,
+                "review_send_failure_notice_failed",
+                error=str(fallback_exc),
+            )
+        observe_review_request("send_error")
+        _command_log_context(
+            update,
+            command="review",
+            outcome="send_error",
+            started_at=started_at,
+            arg_token=token,
+        )
+        return
+
     observe_review_request("success")
     _command_log_context(
         update,

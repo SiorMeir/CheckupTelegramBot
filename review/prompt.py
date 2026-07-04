@@ -31,6 +31,10 @@ Interpretation rules:
 
 Output requirements:
 - Keep the response concise and readable in Telegram.
+- Target 700-1000 words maximum, and prefer less when the data is sparse.
+- Keep each section to 1-3 bullets or short paragraphs.
+- Prioritize the strongest signals only; do not exhaustively list every theme or entry.
+- Avoid repeated evidence, long quotes, filler setup, and generic caveats.
 - Use these sections in order:
   1. Positive trends
   2. Reflection

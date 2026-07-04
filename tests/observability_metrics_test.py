@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+from telegram.error import BadRequest
 
 import app
 from journal.period import ReviewPeriodSpec
@@ -33,6 +34,7 @@ from review.llm import (
     LLMConfig,
     LLMRequestError,
     LLMRequestTooLargeError,
+    LLMResult,
     ensure_input_token_budget,
     generate_review_text,
 )
@@ -176,6 +178,50 @@ def test_review_provider_error_records_command_and_review_metrics(monkeypatch):
         outcome="provider_error",
     ) == 1
     assert get_counter_value(REVIEW_REQUESTS_TOTAL, outcome="provider_error") == 1
+
+
+def test_review_send_error_records_command_and_review_metrics(monkeypatch):
+    update = _make_update()
+    context = _make_context(["2w"])
+    monkeypatch.setattr(
+        app,
+        "journal_reader",
+        MagicMock(collect_review=MagicMock(return_value=_sample_review_collection())),
+    )
+    monkeypatch.setattr(
+        app,
+        "load_llm_config_from_env",
+        MagicMock(
+            return_value=LLMConfig(
+                provider="OPENAI",
+                model="gpt-test",
+                base_url="https://api.openai.com/v1",
+                api_key="secret",
+                timeout_seconds=60,
+                max_input_tokens=8000,
+            )
+        ),
+    )
+    monkeypatch.setattr(app, "ensure_input_token_budget", MagicMock(return_value=123))
+
+    async def _fake_generate(*args, **kwargs):
+        return LLMResult(provider="OPENAI", model="gpt-test", content="Analysis")
+
+    async def _reply_text(text, **kwargs):
+        if "<b>Review | 2w</b>" in text:
+            raise BadRequest("Message is too long")
+
+    update.message.reply_text.side_effect = _reply_text
+    monkeypatch.setattr(app, "generate_review_text", _fake_generate)
+
+    _run(app.review_command(update, context))
+
+    assert get_counter_value(
+        COMMAND_REQUESTS_TOTAL,
+        command="review",
+        outcome="send_error",
+    ) == 1
+    assert get_counter_value(REVIEW_REQUESTS_TOTAL, outcome="send_error") == 1
 
 
 def test_dump_build_error_records_metrics(monkeypatch):

@@ -3,7 +3,8 @@ import json
 from datetime import date
 from unittest.mock import AsyncMock, MagicMock
 
-from telegram.constants import ParseMode
+from telegram.constants import MessageLimit, ParseMode
+from telegram.error import BadRequest
 
 import app
 from journal.period import ReviewPeriodSpec
@@ -31,6 +32,7 @@ def _run(coro):
 def _make_update() -> MagicMock:
     update = MagicMock()
     update.message.reply_text = AsyncMock()
+    update.message.reply_document = AsyncMock()
     return update
 
 
@@ -209,6 +211,130 @@ def test_review_command_formats_successful_reply(monkeypatch):
     assert "- <b>Visible</b> progress." in reply
     assert replies[0].kwargs["parse_mode"] == ParseMode.HTML
     assert replies[1].kwargs["parse_mode"] == ParseMode.HTML
+    update.message.reply_document.assert_not_awaited()
+
+
+def test_paginate_review_message_keeps_short_text_unchanged():
+    pages = app._paginate_review_message("short review", period_label="2w", max_length=100)
+
+    assert pages == ["short review"]
+
+
+def test_paginate_review_message_splits_long_paragraphs_with_page_headers():
+    pages = app._paginate_review_message("A" * 220, period_label="2w", max_length=100)
+
+    assert len(pages) > 1
+    assert all(len(page) <= 100 for page in pages)
+    assert pages[0].startswith("<b>Review | 2w | 1/")
+    assert pages[-1].startswith(f"<b>Review | 2w | {len(pages)}/{len(pages)}</b>")
+    assert "A" * 20 in "".join(pages)
+
+
+def test_paginate_review_message_splits_long_lines_with_page_headers():
+    text = "intro\n\n" + ("B" * 180)
+
+    pages = app._paginate_review_message(text, period_label="4w", max_length=110)
+
+    assert len(pages) > 1
+    assert all(len(page) <= 110 for page in pages)
+    assert pages[0].startswith("<b>Review | 4w | 1/")
+    assert "intro" in pages[0]
+    assert "B" * 20 in "".join(pages)
+
+
+def test_review_command_sends_long_report_across_multiple_messages(monkeypatch):
+    update = _make_update()
+    context = _make_context(["2w"])
+    monkeypatch.setattr(
+        app,
+        "journal_reader",
+        MagicMock(collect_review=MagicMock(return_value=_sample_collection())),
+    )
+    monkeypatch.setattr(
+        app,
+        "load_llm_config_from_env",
+        MagicMock(
+            return_value=LLMConfig(
+                provider="OPENAI",
+                model="gpt-test",
+                base_url="https://api.openai.com/v1",
+                api_key="secret",
+                timeout_seconds=60,
+                max_input_tokens=8000,
+            )
+        ),
+    )
+    monkeypatch.setattr(app, "ensure_input_token_budget", MagicMock(return_value=123))
+
+    async def _fake_generate(*args, **kwargs):
+        return LLMResult(
+            provider="OPENAI",
+            model="gpt-test",
+            content="A" * int(MessageLimit.MAX_TEXT_LENGTH),
+        )
+
+    monkeypatch.setattr(app, "generate_review_text", _fake_generate)
+
+    _run(app.review_command(update, context))
+
+    replies = update.message.reply_text.await_args_list
+    assert len(replies) > 2
+    assert "Review request sent to OPENAI/gpt-test." in replies[0].args[0]
+    paginated_replies = [call.args[0] for call in replies[1:]]
+    assert all(len(reply) <= int(MessageLimit.MAX_TEXT_LENGTH) for reply in paginated_replies)
+    assert paginated_replies[0].startswith("<b>Review | 2w | 1/")
+    assert paginated_replies[-1].startswith(
+        f"<b>Review | 2w | {len(paginated_replies)}/{len(paginated_replies)}</b>"
+    )
+    assert "Model: OPENAI/gpt-test" in paginated_replies[0]
+    assert "A" * 100 in "".join(paginated_replies)
+    for call in replies[1:]:
+        assert call.kwargs["parse_mode"] == ParseMode.HTML
+    update.message.reply_document.assert_not_awaited()
+
+
+def test_review_command_reports_final_send_failure_without_raising(monkeypatch):
+    update = _make_update()
+    context = _make_context(["2w"])
+    monkeypatch.setattr(
+        app,
+        "journal_reader",
+        MagicMock(collect_review=MagicMock(return_value=_sample_collection())),
+    )
+    monkeypatch.setattr(
+        app,
+        "load_llm_config_from_env",
+        MagicMock(
+            return_value=LLMConfig(
+                provider="OPENAI",
+                model="gpt-test",
+                base_url="https://api.openai.com/v1",
+                api_key="secret",
+                timeout_seconds=60,
+                max_input_tokens=8000,
+            )
+        ),
+    )
+    monkeypatch.setattr(app, "ensure_input_token_budget", MagicMock(return_value=123))
+
+    async def _fake_generate(*args, **kwargs):
+        return LLMResult(provider="OPENAI", model="gpt-test", content="Analysis")
+
+    async def _reply_text(text, **kwargs):
+        if "<b>Review | 2w</b>" in text:
+            raise BadRequest("Message is too long")
+
+    update.message.reply_text.side_effect = _reply_text
+    monkeypatch.setattr(app, "generate_review_text", _fake_generate)
+
+    _run(app.review_command(update, context))
+
+    replies = update.message.reply_text.await_args_list
+    assert len(replies) == 3
+    assert "Review request sent to OPENAI/gpt-test." in replies[0].args[0]
+    assert "<b>Review | 2w</b>" in replies[1].args[0]
+    assert "Review was generated, but I could not send the result" in replies[2].args[0]
+    update.message.reply_document.assert_not_awaited()
 
 
 def test_review_command_includes_saved_context_in_llm_payload(monkeypatch):

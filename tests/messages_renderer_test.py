@@ -104,6 +104,18 @@ def test_render_review_request_sent_escapes_provider_and_model():
     assert rendered.parse_mode == ParseMode.HTML
 
 
+def test_render_review_send_failure_message():
+    renderer = TelegramMessageRenderer()
+
+    rendered = renderer.render(
+        TemplateId.TEXT,
+        {"text_key": "review_send_failure", "error": "message <too long>"},
+    )
+
+    assert "message &lt;too long&gt;" in rendered.text
+    assert rendered.parse_mode == ParseMode.HTML
+
+
 def test_render_daily_success_escapes_html_and_renders_empty_lists():
     renderer = TelegramMessageRenderer()
     parsed = DailyCheckIn(

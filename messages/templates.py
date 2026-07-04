@@ -122,6 +122,9 @@ TEXT_MESSAGES: dict[str, str] = {
         "Retry with fewer weeks."
     ),
     "review_provider_failure": "Review failed while calling the LLM provider: ${error}",
+    "review_send_failure": (
+        "Review was generated, but I could not send the result: ${error}"
+    ),
     "dump_usage": "Usage: /dump",
     "dump_empty": "No journal markdown files were found to export.",
     "dump_too_large": (
